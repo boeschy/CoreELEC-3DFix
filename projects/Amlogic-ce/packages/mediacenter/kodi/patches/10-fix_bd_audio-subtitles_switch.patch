@@ -1,0 +1,138 @@
+diff --git a/xbmc/cores/VideoPlayer/DVDInputStreams/DVDInputStreamBluray.cpp b/xbmc/cores/VideoPlayer/DVDInputStreams/DVDInputStreamBluray.cpp
+index 91c066572a..9e82752149 100644
+--- a/xbmc/cores/VideoPlayer/DVDInputStreams/DVDInputStreamBluray.cpp
++++ b/xbmc/cores/VideoPlayer/DVDInputStreams/DVDInputStreamBluray.cpp
+@@ -1068,6 +1068,57 @@ void CDVDInputStreamBluray::GetStreamInfo(int pid, std::string &language)
+     CLog::Log(LOGDEBUG, "CDVDInputStreamBluray::GetStreamInfo - unhandled pid {}", pid);
+ }
+ 
++// Returns the 1-based STN stream number of the entry matching pid, or -1 if not found.
++static int find_stream_number(int pid, BLURAY_STREAM_INFO* info, int count)
++{
++  for (int i = 0; i < count; i++, info++)
++  {
++    if (info->pid == static_cast<uint16_t>(pid))
++      return i + 1;
++  }
++  return -1;
++}
++
++bool CDVDInputStreamBluray::SetActiveAudioStream(int pid)
++{
++  if (!m_bd || !m_navmode || !m_clip)
++    return false;
++
++  int streamNumber = find_stream_number(pid, m_clip->audio_streams, m_clip->audio_stream_count);
++  if (streamNumber < 0)
++  {
++    CLog::Log(LOGDEBUG, "CDVDInputStreamBluray::SetActiveAudioStream - pid {} not found", pid);
++    return false;
++  }
++
++  // Keep libbluray's on-disc menu system (HDMV/BD-J) in sync with the audio
++  // stream selected through Kodi's UI/hotkeys, as documented for
++  // bd_select_stream(). Without this, the elementary stream libbluray
++  // multiplexes into the output - in particular for sub-path audio - is not
++  // updated, and the previously selected track keeps playing.
++  bd_select_stream(m_bd, BLURAY_AUDIO_STREAM, static_cast<uint32_t>(streamNumber), 1);
++  return true;
++}
++
++bool CDVDInputStreamBluray::SetActiveSubtitleStream(int pid)
++{
++  if (!m_bd || !m_navmode || !m_clip)
++    return false;
++
++  int streamNumber = find_stream_number(pid, m_clip->pg_streams, m_clip->pg_stream_count);
++  if (streamNumber < 0)
++  {
++    CLog::Log(LOGDEBUG, "CDVDInputStreamBluray::SetActiveSubtitleStream - pid {} not found", pid);
++    return false;
++  }
++
++  // See SetActiveAudioStream() - the same applies to PG/TextST subtitle
++  // streams, which for many discs are carried in a sub-path and therefore
++  // only get spliced into the output once libbluray is told to select them.
++  bd_select_stream(m_bd, BLURAY_PG_TEXTST_STREAM, static_cast<uint32_t>(streamNumber), 1);
++  return true;
++}
++
+ CDVDInputStream::ENextStream CDVDInputStreamBluray::NextStream()
+ {
+   if(!m_navmode || m_hold == HOLD_EXIT || m_hold == HOLD_ERROR)
+diff --git a/xbmc/cores/VideoPlayer/DVDInputStreams/DVDInputStreamBluray.h b/xbmc/cores/VideoPlayer/DVDInputStreams/DVDInputStreamBluray.h
+index fd2cba6e79..9f7e83c85c 100644
+--- a/xbmc/cores/VideoPlayer/DVDInputStreams/DVDInputStreamBluray.h
++++ b/xbmc/cores/VideoPlayer/DVDInputStreams/DVDInputStreamBluray.h
+@@ -129,6 +129,30 @@ public:
+ 
+   void GetStreamInfo(int pid, std::string &language);
+ 
++  /*!
++   * \brief Notify libbluray of the audio stream selected in Kodi so that
++   *        on-disc menus (HDMV/BD-J) stay in sync with the player GUI, as
++   *        required by the libbluray API. Without this, switching to a
++   *        different audio stream while navigating the disc with its
++   *        native menu system enabled has no effect, since the elementary
++   *        stream that libbluray multiplexes into the output (in
++   *        particular for streams carried in a sub-path) is controlled by
++   *        its own internal player status register rather than by which
++   *        PID Kodi's demuxer happens to be reading.
++   * \param pid the PID of the audio stream to activate
++   * \return true if a stream with the given PID was found and selected
++   */
++  bool SetActiveAudioStream(int pid);
++
++  /*!
++   * \brief Notify libbluray of the subtitle (PG/TextST) stream selected in
++   *        Kodi. See SetActiveAudioStream() for details on why this is
++   *        necessary.
++   * \param pid the PID of the subtitle stream to activate
++   * \return true if a stream with the given PID was found and selected
++   */
++  bool SetActiveSubtitleStream(int pid);
++
+   void OverlayCallback(const BD_OVERLAY * const);
+ #ifdef HAVE_LIBBLURAY_BDJ
+   void OverlayCallbackARGB(const struct bd_argb_overlay_s * const);
+diff --git a/xbmc/cores/VideoPlayer/VideoPlayer.cpp b/xbmc/cores/VideoPlayer/VideoPlayer.cpp
+index dea2735964..2b9f8067bf 100644
+--- a/xbmc/cores/VideoPlayer/VideoPlayer.cpp
++++ b/xbmc/cores/VideoPlayer/VideoPlayer.cpp
+@@ -3145,6 +3145,18 @@ void CVideoPlayer::HandleMessages()
+         }
+         else
+         {
++#if defined(HAVE_LIBBLURAY)
++          if (m_pInputStream && m_pInputStream->IsStreamType(DVDSTREAM_TYPE_BLURAY) && m_pDemuxer)
++          {
++            CDemuxStream* demuxStream = m_pDemuxer->GetStream(st.demuxerId, st.id);
++            if (demuxStream)
++            {
++              std::static_pointer_cast<CDVDInputStreamBluray>(m_pInputStream)
++                  ->SetActiveAudioStream(demuxStream->dvdNavId);
++            }
++          }
++#endif
++
+           CloseStream(m_CurrentAudio, false);
+           OpenStream(m_CurrentAudio, st.demuxerId, st.id, st.source);
+           AdaptForcedSubtitles();
+@@ -3214,6 +3226,18 @@ void CVideoPlayer::HandleMessages()
+         }
+         else
+         {
++#if defined(HAVE_LIBBLURAY)
++          if (m_pInputStream && m_pInputStream->IsStreamType(DVDSTREAM_TYPE_BLURAY) && m_pDemuxer)
++          {
++            CDemuxStream* demuxStream = m_pDemuxer->GetStream(st.demuxerId, st.id);
++            if (demuxStream)
++            {
++              std::static_pointer_cast<CDVDInputStreamBluray>(m_pInputStream)
++                  ->SetActiveSubtitleStream(demuxStream->dvdNavId);
++            }
++          }
++#endif
++
+           CloseStream(m_CurrentSubtitle, false);
+           OpenStream(m_CurrentSubtitle, st.demuxerId, st.id, st.source);

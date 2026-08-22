@@ -1,0 +1,138 @@
+diff --git a/xbmc/cores/VideoPlayer/DVDInputStreams/DVDInputStreamBluray.cpp b/xbmc/cores/VideoPlayer/DVDInputStreams/DVDInputStreamBluray.cpp
+index bfc4bc6883..db1a8180d4 100644
+--- a/xbmc/cores/VideoPlayer/DVDInputStreams/DVDInputStreamBluray.cpp
++++ b/xbmc/cores/VideoPlayer/DVDInputStreams/DVDInputStreamBluray.cpp
+@@ -35,11 +35,106 @@
+ #include <memory>
+ #include <string>
+ #include <vector>
++#include <algorithm>
+ 
+ #include <libbluray/bluray-version.h>
+ #include <libbluray/bluray.h>
+ #include <libbluray/clpi_data.h>
+ #include <libbluray/mpls_data.h>
++
++class CDVDInputStreamBlurayFile : public CDVDInputStream
++{
++public:
++  static constexpr int BD_UNIT = 6144; // 3 x 2048-byte BD sectors
++
++  CDVDInputStreamBlurayFile(BD_FILE_H* file, const std::string& filename, int64_t length)
++    : CDVDInputStream(DVDSTREAM_TYPE_FILE, CFileItem()),
++      m_file(file), m_filename(filename), m_length(length) {}
++
++  ~CDVDInputStreamBlurayFile() override
++  {
++    if (m_file)
++      m_file->close(m_file);
++  }
++
++  bool Open() override { return m_file != nullptr; }
++  void Close() override {}
++
++  int Read(uint8_t* buf, int buf_size) override
++  {
++    if (!m_file || m_eof) return m_eof ? 0 : -1;
++
++    int copied = 0;
++    while (copied < buf_size)
++    {
++      // Refill block buffer when empty
++      if (m_bufPos >= m_bufFill)
++      {
++        int64_t r = m_file->read(m_file, m_buf, BD_UNIT);
++        if (r <= 0) { m_eof = (r == 0); return copied > 0 ? copied : (int)r; }
++        m_filePos += r;
++        m_bufFill  = (int)r;
++        m_bufPos   = 0;
++      }
++      int avail = m_bufFill - m_bufPos;
++      int take  = std::min(avail, buf_size - copied);
++      memcpy(buf + copied, m_buf + m_bufPos, take);
++      m_bufPos += take;
++      copied   += take;
++    }
++    return copied;
++  }
++
++  int64_t Seek(int64_t offset, int whence) override
++  {
++    if (!m_file) return -1;
++    if (whence == AVSEEK_SIZE) return m_length;
++
++    int64_t target;
++    if (whence == SEEK_SET)       target = offset;
++    else if (whence == SEEK_CUR)  target = (m_filePos - m_bufFill + m_bufPos) + offset;
++    else /* SEEK_END */           target = m_length + offset;
++
++    if (target < 0) return -1;
++
++    // Align down to BD_UNIT boundary so the AACS decryptor stays in sync
++    int64_t blockStart = (target / BD_UNIT) * BD_UNIT;
++    int64_t intraBlock = target - blockStart;
++
++    int64_t r = m_file->seek(m_file, blockStart, SEEK_SET);
++    if (r < 0) return -1;
++    m_filePos = blockStart;
++    m_bufFill = 0;
++    m_bufPos  = 0;
++    m_eof     = false;
++
++    // Read the block containing our target and position within it
++    if (intraBlock > 0)
++    {
++      int64_t rd = m_file->read(m_file, m_buf, BD_UNIT);
++      if (rd <= 0) return -1;
++      m_filePos += rd;
++      m_bufFill  = (int)rd;
++      m_bufPos   = (int)intraBlock < m_bufFill ? (int)intraBlock : m_bufFill;
++    }
++    return target;
++  }
++
++  bool    IsEOF()     override { return m_eof; }
++  int64_t GetLength() override { return m_length; }
++  std::string GetFileName() override { return m_filename; }
++
++private:
++  BD_FILE_H*  m_file     = nullptr;
++  std::string m_filename;
++  int64_t     m_length   = 0;
++  int64_t     m_filePos  = 0; // absolute byte position at end of last block read
++  uint8_t     m_buf[BD_UNIT]{};
++  int         m_bufFill  = 0;
++  int         m_bufPos   = 0;
++  bool        m_eof      = false;
++};
++
+ #include <libbluray/log_control.h>
+ 
+ #define LIBBLURAY_BYTESEEK 0
+@@ -1365,8 +1460,24 @@ bool CDVDInputStreamBluray::OpenMVCDemux(int playItem)
+
+   CLog::Log(LOGDEBUG, "CDVDInputStreamBluray::OpenMVCDemuxer(): Opening MVC extension stream at {}", strFileName);
+
+-  CFileItem fileitem(CURL(strFileName), false);
+-  m_pMVCInput = new CDVDInputStreamFile(fileitem, 0);
++  const std::string relPath = "BDMV/STREAM/" +
++    std::string(pl->ext_sub_path[m_nMVCSubPathIndex].sub_play_item[playItem].clip->clip_id) +
++    ".m2ts";
++
++  BD_FILE_H* bdFile = bd_open_file_dec(m_bd, relPath.c_str());
++  if (bdFile)
++  {
++    int64_t length = bdFile->seek(bdFile, 0, SEEK_END);
++    bdFile->seek(bdFile, 0, SEEK_SET);
++    m_pMVCInput = new CDVDInputStreamBlurayFile(bdFile, strFileName, length);
++  }
++  else
++  {
++    CLog::Log(LOGDEBUG, "CDVDInputStreamBluray::OpenMVCDemux - bd_open_file_dec failed, "
++                        "falling back to direct file open");
++    CFileItem fileitem(CURL(strFileName), false);
++    m_pMVCInput = new CDVDInputStreamFile(fileitem, 0);
++  }
+
+   // Try to open the MVC stream
+   if (!m_pMVCInput->Open())

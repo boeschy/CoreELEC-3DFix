@@ -1,0 +1,95 @@
+diff --git a/addons/resource.language.en_gb/resources/strings.po b/addons/resource.language.en_gb/resources/strings.po
+index 1501876739..ffc31873a5 100644
+--- a/addons/resource.language.en_gb/resources/strings.po
++++ b/addons/resource.language.en_gb/resources/strings.po
+@@ -9123,6 +9123,14 @@ msgctxt "#14427"
+ msgid "Player-Led"
+ msgstr ""
+ 
++msgctxt "#14428"
++msgid "Force Dolby Vision to HDR10"
++msgstr ""
++
++msgctxt "#14429"
++msgid "Process Dolby Vision content through the VS10 engine and output as HDR10 on non-DV displays. Enables DV tonemapping on displays without Dolby Vision support."
++msgstr ""
++
+ #: xbmc/music/MusicDatabase.cpp
+ #: xbmc/video/VideoDatabase.cpp
+ msgctxt "#15011"
+diff --git a/system/settings/settings.xml b/system/settings/settings.xml
+index 04951a41d9..e5dc654a7e 100755
+--- a/system/settings/settings.xml
++++ b/system/settings/settings.xml
+@@ -4038,6 +4038,15 @@
+           <default>false</default>
+           <control type="toggle" />
+         </setting>
++        <setting id="coreelec.amlogic.dvforcehdr" type="boolean" label="14428" help="14429">
++          <requirement>HAVE_AMCODEC</requirement>
++          <level>3</level>
++          <dependencies>
++            <dependency type="enable" setting="coreelec.amlogic.disabledolbyvision" operator="is">false</dependency>
++          </dependencies>
++          <default>false</default>
++          <control type="toggle" />
++        </setting>
+         <setting id="coreelec.amlogic.dolbyvisionled"  type="integer" label="14424" help="14425">
+           <requirement>HAVE_AMCODEC</requirement>
+           <default>0</default>
+diff --git a/xbmc/cores/VideoPlayer/DVDCodecs/Video/AMLCodec.cpp b/xbmc/cores/VideoPlayer/DVDCodecs/Video/AMLCodec.cpp
+index 4fe5f898b2..5183793d4d 100644
+--- a/xbmc/cores/VideoPlayer/DVDCodecs/Video/AMLCodec.cpp
++++ b/xbmc/cores/VideoPlayer/DVDCodecs/Video/AMLCodec.cpp
+@@ -2133,8 +2133,9 @@ bool CAMLCodec::OpenDecoder(CDVDStreamInfo &hints, bool doviIsFEL)
+   bool device_support_dv(aml_support_dolby_vision());
+   bool display_support_dv(static_cast<CWinSystemAmlogic*>(CServiceBroker::GetWinSystem())->GetAmlDisplay()->aml_display_support_dv());
+   bool user_dv_disable(CServiceBroker::GetSettingsComponent()->GetSettings()->GetBool(CSettings::SETTING_COREELEC_AMLOGIC_DV_DISABLE));
++  bool user_dv_force_hdr(CServiceBroker::GetSettingsComponent()->GetSettings()->GetBool(CSettings::SETTING_COREELEC_AMLOGIC_DV_FORCE_HDR));
+   bool dv_enable(device_support_dv && !user_dv_disable &&
+-    hints.hdrType == StreamHdrType::HDR_TYPE_DOLBYVISION && (display_support_dv || hints.dovi.dv_profile == 5));
++    hints.hdrType == StreamHdrType::HDR_TYPE_DOLBYVISION && (display_support_dv || hints.dovi.dv_profile == 5 || user_dv_force_hdr));
+   CLog::Log(LOGINFO, "CAMLCodec::OpenDecoder Amlogic device {} support DV, DV is {} by user, display {} support DV, DV system is {}",
+     device_support_dv ? "does" : "does not", user_dv_disable ? "disabled" : "enabled",
+     display_support_dv ? "does" : "does not", dv_enable ? "enabled" : "disabled");
+diff --git a/xbmc/cores/VideoPlayer/DVDCodecs/Video/DVDVideoCodecAmlogic.cpp b/xbmc/cores/VideoPlayer/DVDCodecs/Video/DVDVideoCodecAmlogic.cpp
+index 45576ff63c..1ef6f37d2f 100644
+--- a/xbmc/cores/VideoPlayer/DVDCodecs/Video/DVDVideoCodecAmlogic.cpp
++++ b/xbmc/cores/VideoPlayer/DVDCodecs/Video/DVDVideoCodecAmlogic.cpp
+@@ -413,24 +413,6 @@ bool CDVDVideoCodecAmlogic::Open(CDVDStreamInfo &hints, CDVDCodecOptions &option
+ 
+   m_has_keyframe = false;
+ 
+-  if (m_bitstream)
+-  {
+-    const CHDRCapabilities caps = CServiceBroker::GetWinSystem()->GetDisplayHDRCapabilities();
+-    if (!caps.SupportsHDR10Plus())
+-    {
+-      m_bitstream->SetRemoveHdr10Plus(true);
+-      // the flag waits until the converter proves the stream carries HDR10+
+-      m_stripHdr10Plus = true;
+-    }
+-    if (caps.SupportsDolbyVision() == DolbyVisionFormat::DOLBYVISION_TYPE_NONE &&
+-        m_hints.dovi.dv_profile != 5)
+-    {
+-      m_bitstream->SetRemoveDovi(true);
+-      if (m_hints.dovi.dv_profile > 0)
+-        m_streamMeta.flags.push_back("rpu-removed");
+-    }
+-  }
+-
+   if (m_hints.contentLightMetadata)
+     m_streamMeta.hdrCll = AMLSerializeContentLight(*m_hints.contentLightMetadata);
+   if (m_hints.masteringMetadata &&
+diff --git a/xbmc/settings/Settings.h b/xbmc/settings/Settings.h
+index 70635c53f9..0865e09f31 100644
+--- a/xbmc/settings/Settings.h
++++ b/xbmc/settings/Settings.h
+@@ -474,6 +474,7 @@ public:
+   static constexpr auto SETTING_COREELEC_AMLOGIC_FORCE_CS = "coreelec.amlogic.forcecs";
+   static constexpr auto SETTING_COREELEC_AMLOGIC_DISABLEGUISCALING = "coreelec.amlogic.disableguiscaling";
+   static constexpr auto SETTING_COREELEC_AMLOGIC_DV_DISABLE = "coreelec.amlogic.disabledolbyvision";
++  static constexpr auto SETTING_COREELEC_AMLOGIC_DV_FORCE_HDR = "coreelec.amlogic.dvforcehdr";
+   static constexpr auto SETTING_COREELEC_AMLOGIC_DV_LED = "coreelec.amlogic.dolbyvisionled";
+   static constexpr auto SETTING_CACHE_HARDDISK = "cache.harddisk";
+   static constexpr auto SETTING_CACHEVIDEO_DVDROM = "cachevideo.dvdrom";

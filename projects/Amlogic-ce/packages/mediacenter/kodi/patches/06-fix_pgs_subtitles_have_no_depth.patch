@@ -1,0 +1,1311 @@
+diff --git a/addons/resource.language.en_gb/resources/strings.po b/addons/resource.language.en_gb/resources/strings.po
+index 1501876739..8fdb73f152 100644
+--- a/addons/resource.language.en_gb/resources/strings.po
++++ b/addons/resource.language.en_gb/resources/strings.po
+@@ -24862,7 +24862,49 @@ msgctxt "#39212"
+ msgid "Do not turn on subtitles that are in the same language as the audio being played. Forced subtitles are not affected."
+ msgstr ""
+ 
+-#empty strings from id 39213 to 39899
++#. Title of the bitmap subtitle zoom setting
++#: system/settings/settings.xml
++msgctxt "#39213"
++msgid "Bitmap subtitle zoom"
++msgstr ""
++
++#. Help text for setting "Bitmap subtitle zoom" of label #39213
++#: system/settings/settings.xml
++msgctxt "#39214"
++msgid "Resize picture-based subtitles such as PGS (Blu-ray) and VobSub. 100% is the size they were authored at, which is already the same size on screen whether the disc is Blu-ray or Ultra HD Blu-ray. Lower values shrink them, higher values enlarge them."
++msgstr ""
++
++#. Title of the setting that applies the subtitle position and vertical margin to bitmap subtitles
++#: system/settings/settings.xml
++msgctxt "#39215"
++msgid "Apply position to bitmap subtitles"
++msgstr ""
++
++#. Help text for setting "Apply position to bitmap subtitles" of label #39215
++#: system/settings/settings.xml
++msgctxt "#39216"
++msgid "Move picture-based subtitles such as PGS (Blu-ray) and VobSub to the position set by \"Position on screen\" and \"Vertical margin\". Subtitles found in the lower half of the picture are moved up from the bottom edge, those in the upper half are moved down from the top edge. Anything too large to be a line of text is left where it is."
++msgstr ""
++
++#. Group label for the settings that apply to picture based subtitles
++#: system/settings/settings.xml
++msgctxt "#39217"
++msgid "Image based subtitles"
++msgstr ""
++
++#. Title of the setting that adjusts authored 3D subtitle depth
++#: system/settings/settings.xml
++msgctxt "#39219"
++msgid "Authored subtitle depth adjustment"
++msgstr ""
++
++#. Help text for setting "Authored subtitle depth adjustment" of label #39219
++#: system/settings/settings.xml
++msgctxt "#39220"
++msgid "Move subtitles nearer or further away on discs that author their own per-shot subtitle depth, without discarding that depth. Negative values push them back, positive values bring them forward. Has no effect on discs that author no depth - those use \"Subtitle stereoscopic depth\" instead."
++msgstr ""
++
++#empty strings from id 39221 to 39899
+ 
+ #. List formatting: pattern used to join a list of exactly two items, e.g. "A and B"
+ #. STR_LIST_AND_TWO
+diff --git a/system/settings/settings.xml b/system/settings/settings.xml
+index 04951a41d9..b071ed705d 100755
+--- a/system/settings/settings.xml
++++ b/system/settings/settings.xml
+@@ -917,6 +917,16 @@
+           </constraints>
+           <control type="spinner" format="integer" delayed="true"/>
+         </setting>
++        <setting id="subtitles.stereoscopicdepthadjust" type="integer" label="39219" help="39220">
++          <level>2</level>
++          <default>0</default>
++          <constraints>
++            <minimum>-10</minimum>
++            <step>1</step>
++            <maximum>10</maximum>
++          </constraints>
++          <control type="spinner" format="integer" delayed="true"/>
++        </setting>
+         <setting id="subtitles.charset" type="string" label="735" help="36189">
+           <level>1</level>
+           <default>DEFAULT</default>
+@@ -926,6 +936,28 @@
+           <control type="list" format="string" />
+         </setting>
+       </group>
++      <group id="2" label="39217">
++        <setting id="subtitles.bitmapzoom" type="integer" label="39213" help="39214">
++          <level>2</level>
++          <default>100</default>
++          <constraints>
++            <minimum>10</minimum>
++            <step>1</step>
++            <maximum>200</maximum>
++          </constraints>
++          <!-- Not format="percentage": that makes CGUIControlSliderSetting build a
++               percentage slider, which is hard clamped to 0-100 and ignores the
++               range above, so nothing over 100% could be selected. -->
++          <control type="slider" format="integer">
++            <formatlabel>14047</formatlabel>
++          </control>
++        </setting>
++        <setting id="subtitles.bitmapposition" type="boolean" label="39215" help="39216">
++          <level>2</level>
++          <default>false</default>
++          <control type="toggle" />
++        </setting>
++      </group>
+       <group id="3" label="39187">
+         <setting id="subtitles.parsecaptions" type="boolean" label="24130" help="24131">
+           <level>1</level>
+diff --git a/xbmc/cores/VideoPlayer/DVDCodecs/Overlay/DVDOverlay.h b/xbmc/cores/VideoPlayer/DVDCodecs/Overlay/DVDOverlay.h
+index f989fd626e..509096c808 100644
+--- a/xbmc/cores/VideoPlayer/DVDCodecs/Overlay/DVDOverlay.h
++++ b/xbmc/cores/VideoPlayer/DVDCodecs/Overlay/DVDOverlay.h
+@@ -38,6 +38,8 @@ public:
+     m_enableTextAlign = false;
+     m_overlayContainerFlushable = true;
+     m_setForcedMargins = false;
++    m_isBitmapSubtitle = false;
++    m_isPgsSubtitle = false;
+   }
+ 
+   CDVDOverlay(const CDVDOverlay& src) : std::enable_shared_from_this<CDVDOverlay>(src)
+@@ -49,9 +51,12 @@ public:
+     replace = src.replace;
+     m_textureid = 0;
+     m_3dSubtitleDepth = 0;
++    m_3dSubtitleDepthAuthored = false;
+     m_enableTextAlign = src.m_enableTextAlign;
+     m_overlayContainerFlushable = src.m_overlayContainerFlushable;
+     m_setForcedMargins = src.m_setForcedMargins;
++    m_isBitmapSubtitle = src.m_isBitmapSubtitle;
++    m_isPgsSubtitle = src.m_isPgsSubtitle;
+   }
+ 
+   virtual ~CDVDOverlay() = default;
+@@ -106,6 +111,24 @@ public:
+    */
+   bool IsForcedMargins() const { return m_setForcedMargins; }
+ 
++  /*
++   * \brief Mark the overlay as a bitmap subtitle, i.e. a picture of text
++   * belonging to a subtitle track. Menu graphics (Blu-ray IG/PG menus, DVD
++   * button highlights) share the same overlay classes but are not subtitles
++   * and must never be moved or resized by the subtitle settings.
++   */
++  void SetBitmapSubtitle(bool isBitmapSubtitle) { m_isBitmapSubtitle = isBitmapSubtitle; }
++
++  /*
++   * \brief Return true if the overlay is a bitmap subtitle, false for menu
++   * graphics and anything else drawn through the same overlay classes.
++   */
++  bool IsBitmapSubtitle() const { return m_isBitmapSubtitle; }
++
++  /* Narrower than IsBitmapSubtitle(): only PG carries authored MVC depth. */
++  void SetPgsSubtitle(bool isPgsSubtitle) { m_isPgsSubtitle = isPgsSubtitle; }
++  bool IsPgsSubtitle() const { return m_isPgsSubtitle; }
++
+   double iPTSStartTime;
+   double iPTSStopTime;
+   bool bForced; // display, no matter what
+@@ -113,11 +136,14 @@ public:
+   unsigned long m_textureid;
+ 
+   int m_3dSubtitleDepth;
++  bool m_3dSubtitleDepthAuthored;
+ protected:
+   DVDOverlayType m_type;
+   bool m_enableTextAlign;
+   bool m_overlayContainerFlushable;
+   bool m_setForcedMargins;
++  bool m_isBitmapSubtitle;
++  bool m_isPgsSubtitle;
+ };
+ 
+ using VecOverlays = std::vector<std::shared_ptr<CDVDOverlay>>;
+diff --git a/xbmc/cores/VideoPlayer/DVDCodecs/Overlay/DVDOverlayCodecFFmpeg.cpp b/xbmc/cores/VideoPlayer/DVDCodecs/Overlay/DVDOverlayCodecFFmpeg.cpp
+index 670159ec41..abb6b2919f 100644
+--- a/xbmc/cores/VideoPlayer/DVDCodecs/Overlay/DVDOverlayCodecFFmpeg.cpp
++++ b/xbmc/cores/VideoPlayer/DVDCodecs/Overlay/DVDOverlayCodecFFmpeg.cpp
+@@ -281,6 +281,16 @@ std::shared_ptr<CDVDOverlay> CDVDOverlayCodecFFmpeg::GetOverlay()
+     overlay->source_width = m_width;
+     overlay->source_height = m_height;
+ 
++    // PGS and VobSub carry nothing but pictures of subtitle text, so the user
++    // may reposition and resize them. DVB subtitles are deliberately left out:
++    // the same codec path also delivers broadcast logos and graphics, which
++    // are placed where the broadcaster meant them to be.
++    const AVCodecID codecId = m_pCodecContext->codec_id;
++    overlay->SetBitmapSubtitle(codecId == AV_CODEC_ID_HDMV_PGS_SUBTITLE ||
++                               codecId == AV_CODEC_ID_DVD_SUBTITLE);
++
++    overlay->SetPgsSubtitle(codecId == AV_CODEC_ID_HDMV_PGS_SUBTITLE);
++
+     uint8_t* s = rect.data[0];
+     uint8_t* t = overlay->pixels.data();
+ 
+diff --git a/xbmc/cores/VideoPlayer/DVDCodecs/Video/AMLFrameMetadata.h b/xbmc/cores/VideoPlayer/DVDCodecs/Video/AMLFrameMetadata.h
+index 7a0643deaa..10b5a9aa05 100644
+--- a/xbmc/cores/VideoPlayer/DVDCodecs/Video/AMLFrameMetadata.h
++++ b/xbmc/cores/VideoPlayer/DVDCodecs/Video/AMLFrameMetadata.h
+@@ -19,6 +19,7 @@
+ #include <string>
+ #include <utility>
+ #include <vector>
++#include <cstring>
+ 
+ extern "C"
+ {
+@@ -44,6 +45,9 @@ struct AMLFrameMetadata
+   std::string hdrMdcv;
+   std::string hdrCll;
+ 
++  // One signed pixel offset per subtitle plane; empty without OFMD.
++  std::vector<int8_t> mvcOffsets;
++
+   bool operator==(const AMLFrameMetadata&) const = default;
+ 
+   // a frame without a payload holds the last carried one instead of
+@@ -58,6 +62,8 @@ struct AMLFrameMetadata
+       hdrMdcv = prev.hdrMdcv;
+     if (hdrCll.empty())
+       hdrCll = prev.hdrCll;
++    if (mvcOffsets.empty())
++      mvcOffsets = prev.mvcOffsets;
+   }
+ 
+   // values are base64 or plain flag tokens, so no JSON escaping is needed
+@@ -332,6 +338,117 @@ inline void AMLLatchHevcDoviRpu(const uint8_t* data,
+   }
+ }
+ 
++// Reads the Blu-ray 3D "1 plane + offset" table into table[sequence][frame].
++// Carried once per GOP in an SEI user_data_unregistered payload:
++//
++//   byte  0..3   'OFMD'
++//   byte 10      number of offset sequences (low 6 bits)
++//   byte 11      displayed frames in this GOP (low 7 bits)
++//   byte 14..    nseq * frames values, sequence-major; bit 7 is the sign and
++//                bits 0..6 the offset in pixels of a 1920 wide plane
++inline bool AMLParseMvcOfmd(const uint8_t* data,
++                            size_t size,
++                            int nalLengthSize,
++                            std::vector<std::vector<int8_t>>& table)
++{
++  static const uint8_t kOfmdUuid[16] = {0x17, 0xee, 0x8c, 0x60, 0xf8, 0x4d, 0x11, 0xd9,
++                                        0x8c, 0xd6, 0x08, 0x00, 0x20, 0x0c, 0x9a, 0x66};
++  if (!data || size < 4)
++    return false;
++
++  bool found = false;
++
++  const auto parseNal = [&](const uint8_t* nal, size_t len)
++  {
++    if (found || len < 2 || (nal[0] & 0x1f) != 6) // H.264 SEI
++      return;
++
++    // Unescape first: an emulation-prevention byte inside the payload would
++    // shift the value table silently rather than fail to parse.
++    std::vector<uint8_t> rbsp;
++    rbsp.reserve(len);
++    for (size_t i = 1; i < len; ++i)
++    {
++      if (i + 2 < len && nal[i] == 0 && nal[i + 1] == 0 && nal[i + 2] == 3)
++      {
++        rbsp.push_back(0);
++        rbsp.push_back(0);
++        i += 2;
++      }
++      else
++        rbsp.push_back(nal[i]);
++    }
++
++    if (rbsp.size() < sizeof(kOfmdUuid) + 20)
++      return;
++
++    for (size_t i = 0; i + sizeof(kOfmdUuid) + 14 <= rbsp.size(); ++i)
++    {
++      if (memcmp(rbsp.data() + i, kOfmdUuid, sizeof(kOfmdUuid)) != 0)
++        continue;
++
++      const uint8_t* o = rbsp.data() + i + sizeof(kOfmdUuid);
++      const size_t avail = rbsp.size() - (i + sizeof(kOfmdUuid));
++      if (avail < 14 || memcmp(o, "OFMD", 4) != 0)
++        continue;
++
++      const size_t sequences = o[10] & 0x3f;
++      const size_t frames = o[11] & 0x7f;
++      if (!sequences || !frames || 14 + sequences * frames > avail)
++        continue;
++
++      table.assign(sequences, std::vector<int8_t>(frames, 0));
++      for (size_t seq = 0; seq < sequences; ++seq)
++      {
++        for (size_t f = 0; f < frames; ++f)
++        {
++          const uint8_t v = o[14 + seq * frames + f];
++          table[seq][f] = static_cast<int8_t>((v & 0x80) ? -(v & 0x7f) : (v & 0x7f));
++        }
++      }
++      found = true;
++      return;
++    }
++  };
++
++  if (nalLengthSize >= 1 && nalLengthSize <= 4)
++  {
++    size_t pos = 0;
++    while (pos + nalLengthSize <= size)
++    {
++      uint32_t len = 0;
++      for (int i = 0; i < nalLengthSize; ++i)
++        len = (len << 8) | data[pos + i];
++      pos += nalLengthSize;
++      if (len == 0 || len > size - pos)
++        break;
++      parseNal(data + pos, len);
++      pos += len;
++    }
++  }
++  else
++  {
++    size_t nal = SIZE_MAX;
++    for (size_t i = 0; i + 2 < size; ++i)
++    {
++      if (data[i] != 0 || data[i + 1] != 0 || data[i + 2] != 1)
++        continue;
++      if (nal != SIZE_MAX)
++      {
++        size_t end = i;
++        while (end > nal && data[end - 1] == 0)
++          end--;
++        parseNal(data + nal, end - nal);
++      }
++      nal = i + 3;
++    }
++    if (nal != SIZE_MAX && nal < size)
++      parseNal(data + nal, size - nal);
++  }
++
++  return found;
++}
++
+ // Walks one demux packet for the prefix SEI payloads worth publishing: the
+ // HDR10+ T.35, the mastering display colour volume and the content light
+ // level, each latched verbatim after unescaping.
+diff --git a/xbmc/cores/VideoPlayer/DVDCodecs/Video/DVDVideoCodec.cpp b/xbmc/cores/VideoPlayer/DVDCodecs/Video/DVDVideoCodec.cpp
+index 59388e3940..fb924b88e0 100644
+--- a/xbmc/cores/VideoPlayer/DVDCodecs/Video/DVDVideoCodec.cpp
++++ b/xbmc/cores/VideoPlayer/DVDCodecs/Video/DVDVideoCodec.cpp
+@@ -44,6 +44,7 @@ void VideoPicture::Reset()
+   stereoMode.clear();
+ 
+   m_3dSubtitleDepth = 0;
++  m_3dSubtitleDepthAuthored = false;
+ 
+   qp_table = nullptr;
+   qstride = 0;
+diff --git a/xbmc/cores/VideoPlayer/DVDCodecs/Video/DVDVideoCodec.h b/xbmc/cores/VideoPlayer/DVDCodecs/Video/DVDVideoCodec.h
+index 8c0e000f00..ac3a157a15 100644
+--- a/xbmc/cores/VideoPlayer/DVDCodecs/Video/DVDVideoCodec.h
++++ b/xbmc/cores/VideoPlayer/DVDCodecs/Video/DVDVideoCodec.h
+@@ -61,6 +61,7 @@ public:
+   std::string stereoMode;
+ 
+   int m_3dSubtitleDepth;
++  bool m_3dSubtitleDepthAuthored;
+ 
+   int8_t* qp_table;                //< Quantization parameters, primarily used by filters
+   int qstride;
+diff --git a/xbmc/cores/VideoPlayer/DVDCodecs/Video/DVDVideoCodecAmlogic.cpp b/xbmc/cores/VideoPlayer/DVDCodecs/Video/DVDVideoCodecAmlogic.cpp
+index 45576ff63c..c5656ebb87 100644
+--- a/xbmc/cores/VideoPlayer/DVDCodecs/Video/DVDVideoCodecAmlogic.cpp
++++ b/xbmc/cores/VideoPlayer/DVDCodecs/Video/DVDVideoCodecAmlogic.cpp
+@@ -493,6 +493,9 @@ bool CDVDVideoCodecAmlogic::AddData(const DemuxPacket &packet)
+ 
+   DrainMetadataToClock();
+ 
++  // Set by CVideoPlayer::Process() from the STN-SS ss_offset_sequence_id.
++  m_subtitlePlane = packet.subtitlePlane;
++
+   uint8_t *pData(packet.pData);
+   uint32_t iSize(packet.iSize);
+   bool doviIsFEL = false;
+@@ -534,6 +537,15 @@ bool CDVDVideoCodecAmlogic::AddData(const DemuxPacket &packet)
+       }
+     }
+ 
++    // MVC is SDR, so this sits outside the HDR gate above.
++    if (m_hints.codec == AV_CODEC_ID_H264 && m_subtitlePlane >= 0)
++    {
++      if (AMLParseMvcOfmd(pData, iSize, m_nalLengthSize, m_ofmdTable))
++      {
++        m_ofmdFrame = 0;
++      }
++    }
++
+     if (m_bitstream)
+     {
+       if (packet.isDualStream && aml_dolby_vision_enabled())
+@@ -802,6 +814,18 @@ CDVDVideoCodec::VCReturn CDVDVideoCodecAmlogic::GetPicture(VideoPicture* pVideoP
+     pVideoPicture->videoBuffer = m_videoBufferPool->Get();
+     static_cast<CAMLVideoBuffer*>(pVideoPicture->videoBuffer)->Set(this, m_Codec,
+      m_Codec->GetOMXPts(), m_Codec->GetAmlDuration(), m_Codec->GetBufferIndex());;
++
++    // The OFMD table is in display order, so it is indexed by output picture.
++    if (m_subtitlePlane >= 0 && static_cast<size_t>(m_subtitlePlane) < m_ofmdTable.size())
++    {
++      const std::vector<int8_t>& sequence = m_ofmdTable[m_subtitlePlane];
++      if (!sequence.empty())
++      {
++        pVideoPicture->m_3dSubtitleDepth = sequence[m_ofmdFrame % sequence.size()];
++        pVideoPicture->m_3dSubtitleDepthAuthored = true;
++      }
++      m_ofmdFrame++;
++    }
+   }
+ 
+   // check for mpeg2 aspect ratio changes
+diff --git a/xbmc/cores/VideoPlayer/DVDCodecs/Video/DVDVideoCodecAmlogic.h b/xbmc/cores/VideoPlayer/DVDCodecs/Video/DVDVideoCodecAmlogic.h
+index bea43af30a..2ed46dc131 100644
+--- a/xbmc/cores/VideoPlayer/DVDCodecs/Video/DVDVideoCodecAmlogic.h
++++ b/xbmc/cores/VideoPlayer/DVDCodecs/Video/DVDVideoCodecAmlogic.h
+@@ -115,6 +115,9 @@ private:
+ 
+   uint32_t m_metadataToken{0};
+   bool m_metaLeadLogged{false};
++  int m_subtitlePlane{-1};
++  std::vector<std::vector<int8_t>> m_ofmdTable;
++  size_t m_ofmdFrame{0};
+   bool m_stripHdr10Plus{false};
+   bool m_dualLayer{false};
+   int m_nalLengthSize{0};
+diff --git a/xbmc/cores/VideoPlayer/VideoPlayerVideo.cpp b/xbmc/cores/VideoPlayer/VideoPlayerVideo.cpp
+index 8390a88d3f..49df305182 100644
+--- a/xbmc/cores/VideoPlayer/VideoPlayerVideo.cpp
++++ b/xbmc/cores/VideoPlayer/VideoPlayerVideo.cpp
+@@ -952,11 +952,20 @@ void CVideoPlayerVideo::ProcessOverlays(const VideoPicture* pSource, double pts)
+       {
+ 
+         pOverlay->m_3dSubtitleDepth = pSource->m_3dSubtitleDepth;
++        pOverlay->m_3dSubtitleDepthAuthored = pSource->m_3dSubtitleDepthAuthored;
+ 
+         if(pOverlay->IsOverlayType(DVDOVERLAY_TYPE_GROUP))
+-          overlays.insert(overlays.end(),
+-                          static_cast<CDVDOverlayGroup&>(*pOverlay).m_overlays.begin(),
+-                          static_cast<CDVDOverlayGroup&>(*pOverlay).m_overlays.end());
++        {
++          // The children are what reach the renderer, so they need it too.
++          CDVDOverlayGroup& group = static_cast<CDVDOverlayGroup&>(*pOverlay);
++          for (auto& child : group.m_overlays)
++          {
++            child->m_3dSubtitleDepth = pSource->m_3dSubtitleDepth;
++            child->m_3dSubtitleDepthAuthored = pSource->m_3dSubtitleDepthAuthored;
++          }
++
++          overlays.insert(overlays.end(), group.m_overlays.begin(), group.m_overlays.end());
++        }
+         else
+           overlays.push_back(pOverlay);
+       }
+diff --git a/xbmc/cores/VideoPlayer/VideoRenderers/DebugRenderer.cpp b/xbmc/cores/VideoPlayer/VideoRenderers/DebugRenderer.cpp
+index 4a2903c53b..024f91b78e 100644
+--- a/xbmc/cores/VideoPlayer/VideoRenderers/DebugRenderer.cpp
++++ b/xbmc/cores/VideoPlayer/VideoRenderers/DebugRenderer.cpp
+@@ -262,7 +262,11 @@ void CDebugRenderer::CRenderer::Render(int idx, float depth)
+       std::shared_ptr<COverlay> o = COverlay::Create(images, rOpts.frameWidth, rOpts.frameHeight);
+ 
+       if (o)
+-        OVERLAY::CRenderer::Render(o.get());
++      {
++        SRenderState state;
++        OVERLAY::CRenderer::GetRenderState(o.get(), state);
++        o->Render(state);
++      }
+     }
+   }
+   ReleaseUnused();
+diff --git a/xbmc/cores/VideoPlayer/VideoRenderers/OverlayRenderer.cpp b/xbmc/cores/VideoPlayer/VideoRenderers/OverlayRenderer.cpp
+index cf8b80be45..b1b32b2b41 100644
+--- a/xbmc/cores/VideoPlayer/VideoRenderers/OverlayRenderer.cpp
++++ b/xbmc/cores/VideoPlayer/VideoRenderers/OverlayRenderer.cpp
+@@ -26,6 +26,7 @@
+ #include "windowing/WinSystem.h"
+ 
+ #include <algorithm>
++#include <cstring>
+ #include <mutex>
+ #include <utility>
+ 
+@@ -45,6 +46,89 @@ COverlay::COverlay()
+ 
+ COverlay::~COverlay() = default;
+ 
++namespace
++{
++/*!
++ * \brief Measure where the visible pixels sit inside a bitmap overlay's
++ *        rectangle, as fractions of it inward from each edge.
++ *
++ *  PGS and VobSub encoders crop their objects tightly, so this is almost
++ *  always zero on all four sides. It cannot simply be assumed: a stream is
++ *  free to put one short line of text inside a large rectangle, and that
++ *  rectangle must not then be mistaken for a full screen graphic and left
++ *  unmoved.
++ */
++OVERLAY::SContentInset MeasureContentInset(const CDVDOverlayImage& o)
++{
++  OVERLAY::SContentInset inset;
++
++  if (o.width <= 0 || o.height <= 0 || o.pixels.empty())
++    return inset;
++
++  int minX = o.width;
++  int maxX = -1;
++  int minY = o.height;
++  int maxY = -1;
++
++  // Reduce a palette to one opaque/transparent bit per entry so the pixel walk
++  // below is a single table lookup.
++  std::vector<bool> opaque;
++  opaque.reserve(o.palette.size());
++  for (const uint32_t entry : o.palette)
++    opaque.push_back(((entry >> PIXEL_ASHIFT) & 0xff) != 0);
++
++  for (int row = 0; row < o.height; ++row)
++  {
++    const uint8_t* line = o.pixels.data() + static_cast<size_t>(row) * o.linesize;
++    int first = -1;
++    int last = -1;
++
++    for (int col = 0; col < o.width; ++col)
++    {
++      bool visible;
++      if (opaque.empty())
++      {
++        uint32_t pixel;
++        std::memcpy(&pixel, line + static_cast<size_t>(col) * 4, sizeof(pixel));
++        visible = ((pixel >> PIXEL_ASHIFT) & 0xff) != 0;
++      }
++      else
++      {
++        const uint8_t index = line[col];
++        visible = index < opaque.size() && opaque[index];
++      }
++
++      if (!visible)
++        continue;
++
++      if (first < 0)
++        first = col;
++      last = col;
++    }
++
++    if (first < 0)
++      continue;
++
++    minX = std::min(minX, first);
++    maxX = std::max(maxX, last);
++    if (minY > row)
++      minY = row;
++    maxY = row;
++  }
++
++  if (maxY < 0)
++    return inset;
++
++  const float width = static_cast<float>(o.width);
++  const float height = static_cast<float>(o.height);
++  inset.left = static_cast<float>(minX) / width;
++  inset.right = static_cast<float>(o.width - 1 - maxX) / width;
++  inset.top = static_cast<float>(minY) / height;
++  inset.bottom = static_cast<float>(o.height - 1 - maxY) / height;
++  return inset;
++}
++} // unnamed namespace
++
+ void OVERLAY::MarkDirty()
+ {
+   CServiceBroker::GetGUI()->GetWindowManager().MarkDirty();
+@@ -150,24 +234,41 @@ void CRenderer::Render(int idx, float depth)
+ {
+   std::unique_lock lock(m_section);
+ 
+-  std::vector<SElement>& list = m_buffers[idx];
+-  for(std::vector<SElement>::iterator it = list.begin(); it != list.end(); ++it)
++  // Resolve every overlay's geometry before drawing any of it: bitmap subtitle
++  // repositioning has to see the whole frame to know how far to move a line.
++  std::vector<SRenderItem> items;
++  items.reserve(m_buffers[idx].size());
++
++  for (auto& e : m_buffers[idx])
+   {
+-    if (it->overlay_dvd)
+-    {
+-      std::shared_ptr<COverlay> o = Convert(*it);
++    if (!e.overlay_dvd)
++      continue;
+ 
+-      if (o)
+-        Render(o.get());
+-    }
++    std::shared_ptr<COverlay> o = Convert(e);
++    if (!o)
++      continue;
++
++    // COverlay is texture-cached, so refresh per frame, not in Convert().
++    o->m_3dSubtitleDepth = e.overlay_dvd->m_3dSubtitleDepth;
++    o->m_3dSubtitleDepthAuthored = e.overlay_dvd->m_3dSubtitleDepthAuthored;
++    o->m_pgsSubtitle = e.overlay_dvd->IsPgsSubtitle();
++
++    SRenderItem item;
++    GetRenderState(o.get(), item.state);
++    item.overlay = std::move(o);
++    items.emplace_back(std::move(item));
+   }
+ 
++  RepositionBitmapSubtitles(items);
++
++  for (auto& item : items)
++    item.overlay->Render(item.state);
++
+   ReleaseUnused();
+ }
+ 
+-void CRenderer::Render(COverlay* o)
++void CRenderer::GetRenderState(COverlay* o, SRenderState& state) const
+ {
+-  SRenderState state;
+   state.x = o->m_x;
+   state.y = o->m_y;
+   state.width = o->m_width;
+@@ -249,9 +350,121 @@ void CRenderer::Render(COverlay* o)
+     }
+   }
+ 
+-  state.x += GetStereoscopicDepth(o->m_pgsSubtitle, o->m_3dSubtitleDepth);
++  if (o->m_isBitmapSubtitle && m_bitmapZoomPerc != 100)
++  {
++    const float zoom = static_cast<float>(m_bitmapZoomPerc) / 100.0f;
++    const CRect before = GetContentRect(*o, state);
++    const bool lowerHalf = before.y1 + before.Height() * 0.5f > m_rv.y1 + m_rv.Height() * 0.5f;
++
++    state.width *= zoom;
++    state.height *= zoom;
++
++    // Resizing must not also move the text off the line it sits on, so keep
++    // the content centred where it was and pin the edge nearest the screen
++    // edge it is read against.
++    const CRect after = GetContentRect(*o, state);
++    state.x += before.x1 + before.Width() * 0.5f - (after.x1 + after.Width() * 0.5f);
++    state.y += lowerHalf ? before.y2 - after.y2 : before.y1 - after.y1;
++  }
++
++  state.x += GetStereoscopicDepth(o->m_pgsSubtitle, o->m_3dSubtitleDepth,
++                                  o->m_3dSubtitleDepthAuthored);
++}
+ 
+-  o->Render(state);
++CRect CRenderer::GetContentRect(const COverlay& o, const SRenderState& state)
++{
++  // POSITION_RELATIVE places the quad by its centre, everything else by its
++  // top left corner. COverlayTexture*::Render makes the same distinction.
++  const float x1 = o.m_pos == COverlay::POSITION_RELATIVE ? state.x - state.width * 0.5f : state.x;
++  const float y1 = o.m_pos == COverlay::POSITION_RELATIVE ? state.y - state.height * 0.5f : state.y;
++
++  return {x1 + o.m_contentInset.left * state.width, y1 + o.m_contentInset.top * state.height,
++          x1 + state.width - o.m_contentInset.right * state.width,
++          y1 + state.height - o.m_contentInset.bottom * state.height};
++}
++
++void CRenderer::RepositionBitmapSubtitles(std::vector<SRenderItem>& items) const
++{
++  if (!m_bitmapPosition)
++    return;
++
++  // Content rectangles of the bitmap subtitles on screen, ordered top down.
++  std::vector<std::pair<size_t, CRect>> subs;
++  for (size_t i = 0; i < items.size(); ++i)
++  {
++    const COverlay& o = *items[i].overlay;
++    if (o.m_isBitmapSubtitle)
++      subs.emplace_back(i, GetContentRect(o, items[i].state));
++  }
++
++  if (subs.empty())
++    return;
++
++  std::sort(subs.begin(), subs.end(),
++            [](const auto& a, const auto& b) { return a.second.y1 < b.second.y1; });
++
++  // A bitmap subtitle is authored against the picture, so its proportions are
++  // judged against the picture too. m_rd is the video rectangle, which reaches
++  // outside the screen when the video is zoomed.
++  CRect picture{m_rd};
++  picture.Intersect(m_rv);
++  if (picture.Height() <= 0.0f)
++    picture = m_rv;
++
++  // A presentation can carry a line of dialogue and a translated sign at once,
++  // as separate objects. Moving their union would drag the sign along with the
++  // dialogue, so objects are only moved together while they stay close enough
++  // to belong to the same block of text.
++  const float groupGap = picture.Height() * 0.15f;
++  // Taller than this is a graphic, not a line of text; leave it where it is.
++  const float maxHeight = picture.Height() / 3.0f;
++  const float pictureMiddle = picture.y1 + picture.Height() * 0.5f;
++
++  const RESOLUTION_INFO resInfo = CServiceBroker::GetWinSystem()->GetGfxContext().GetResInfo();
++
++  // "Bottom of video" and "Top of video" measure from the picture, every other
++  // alignment from the screen. Text subtitles already work this way: for
++  // MarginsMode::INSIDE_VIDEO, CDVDSubtitlesLibass insets libass' margins by
++  // the letterbox bar so the text stays inside the picture.
++  const bool insideVideo = m_subtitleAlign == SUBTITLES::Align::BOTTOM_INSIDE ||
++                           m_subtitleAlign == SUBTITLES::Align::TOP_INSIDE;
++  const CRect& edges = insideVideo ? picture : m_rv;
++
++  // Outside the picture the bottom line comes from m_subtitlePosition, which is
++  // the text baseline in view coordinates with the vertical margin already
++  // subtracted - the same value libass is given, so it also follows the
++  // calibration bar under Align::MANUAL.
++  const float bottomTarget =
++      insideVideo ? edges.y2 - static_cast<float>(m_subtitleVerticalMargin)
++                  : m_rv.y1 + static_cast<float>(m_subtitlePosition - resInfo.Overscan.top);
++  const float topTarget = edges.y1 + static_cast<float>(m_subtitleVerticalMargin);
++
++  for (size_t first = 0; first < subs.size();)
++  {
++    size_t last = first;
++    CRect group = subs[first].second;
++    while (last + 1 < subs.size() && subs[last + 1].second.y1 <= group.y2 + groupGap)
++    {
++      ++last;
++      group.y1 = std::min(group.y1, subs[last].second.y1);
++      group.y2 = std::max(group.y2, subs[last].second.y2);
++    }
++
++    const bool lowerHalf = group.y1 + group.Height() * 0.5f > pictureMiddle;
++    const bool straddles = group.y1 < pictureMiddle && group.y2 > pictureMiddle;
++
++    if (group.Height() <= maxHeight && !straddles)
++    {
++      float offset = lowerHalf ? bottomTarget - group.y2 : topTarget - group.y1;
++      // Never push a subtitle off the frame to satisfy the margin
++      offset = std::clamp(offset, m_rv.y1 - group.y1, m_rv.y2 - group.y2);
++
++      for (size_t i = first; i <= last; ++i)
++        items[subs[i].first].state.y += offset;
++    }
++
++    first = last + 1;
++  }
+ }
+ 
+ bool CRenderer::HasVisibleOverlay(int idx) const
+@@ -355,6 +568,32 @@ void CRenderer::ResetSubtitlePosition()
+   appPlayer->SetSubtitleVerticalPosition(pos, false);
+ }
+ 
++RESOLUTION_INFO CRenderer::SyncSubtitlePosition()
++{
++  // Set position of subtitles based on video calibration settings
++  RESOLUTION_INFO resInfo = CServiceBroker::GetWinSystem()->GetGfxContext().GetResInfo();
++
++  // Keep track of subtitle position value change,
++  // can be changed by GUI Calibration or by window mode/resolution change or
++  // by user manual change (e.g. keyboard shortcut)
++  if (m_subtitlePosResInfo != resInfo.iSubtitles)
++  {
++    if (m_subtitlePosResInfo == POSRESINFO_SAVE_CHANGES)
++    {
++      // m_subtitlePosition has been changed
++      // and has been requested to save the value to resInfo
++      resInfo.iSubtitles = m_subtitlePosition + m_subtitleVerticalMargin;
++      CServiceBroker::GetWinSystem()->GetGfxContext().SetResInfo(
++          CServiceBroker::GetWinSystem()->GetGfxContext().GetVideoResolution(), resInfo);
++      m_subtitlePosResInfo = m_subtitlePosition + m_subtitleVerticalMargin;
++    }
++    else
++      ResetSubtitlePosition();
++  }
++
++  return resInfo;
++}
++
+ void CRenderer::CreateSubtitlesStyle()
+ {
+   m_overlayStyle = std::make_shared<SUBTITLES::STYLE::style>();
+@@ -430,6 +669,24 @@ void CRenderer::PrepareOverlays(int idx)
+ 
+   bool doMarkDirty = false;
+   bool hasImageSpu = false;
++
++  // The subtitle settings and the subtitle position drive bitmap subtitle
++  // placement as well as libass rendering, so they are loaded for any overlay
++  // rather than only when a libass track is present.
++  bool updateStyle = false;
++  RESOLUTION_INFO resInfo;
++  if (!m_buffers[idx].empty())
++  {
++    if (!m_overlayStyle || m_isSettingsChanged)
++    {
++      m_isSettingsChanged = false;
++      LoadSettings();
++      CreateSubtitlesStyle();
++      updateStyle = true;
++    }
++    resInfo = SyncSubtitlePosition();
++  }
++
+   for (auto& e : m_buffers[idx])
+   {
+     // Clear last frame's cached output; libass may have invalidated the
+@@ -462,14 +719,6 @@ void CRenderer::PrepareOverlays(int idx)
+     if (!ovAss.GetLibassHandler())
+       continue;
+ 
+-    bool updateStyle = !m_overlayStyle || m_isSettingsChanged;
+-    if (updateStyle)
+-    {
+-      m_isSettingsChanged = false;
+-      LoadSettings();
+-      CreateSubtitlesStyle();
+-    }
+-
+     // rOpts setup moved from CRenderer::ConvertLibass; duplicated in CDebugRenderer::CRenderer::Render.
+     SUBTITLES::STYLE::renderOpts rOpts;
+ 
+@@ -483,26 +732,6 @@ void CRenderer::PrepareOverlays(int idx)
+     rOpts.frameWidth = m_rv.Width();
+     rOpts.frameHeight = m_rv.Height();
+ 
+-    // Set position of subtitles based on video calibration settings
+-    RESOLUTION_INFO resInfo = CServiceBroker::GetWinSystem()->GetGfxContext().GetResInfo();
+-    // Keep track of subtitle position value change,
+-    // can be changed by GUI Calibration or by window mode/resolution change or
+-    // by user manual change (e.g. keyboard shortcut)
+-    if (m_subtitlePosResInfo != resInfo.iSubtitles)
+-    {
+-      if (m_subtitlePosResInfo == POSRESINFO_SAVE_CHANGES)
+-      {
+-        // m_subtitlePosition has been changed
+-        // and has been requested to save the value to resInfo
+-        resInfo.iSubtitles = m_subtitlePosition + m_subtitleVerticalMargin;
+-        CServiceBroker::GetWinSystem()->GetGfxContext().SetResInfo(
+-            CServiceBroker::GetWinSystem()->GetGfxContext().GetVideoResolution(), resInfo);
+-        m_subtitlePosResInfo = m_subtitlePosition + m_subtitleVerticalMargin;
+-      }
+-      else
+-        ResetSubtitlePosition();
+-    }
+-
+     rOpts.m_par = resInfo.fPixelRatio;
+ 
+     // rOpts.position and margins (set to style) can invalidate the text
+@@ -657,9 +886,23 @@ std::shared_ptr<COverlay> CRenderer::Convert(SElement& e)
+   }
+ 
+   if (o.IsOverlayType(DVDOVERLAY_TYPE_IMAGE))
+-    r = COverlay::Create(static_cast<CDVDOverlayImage&>(o), m_rs);
++  {
++    CDVDOverlayImage& ovImage = static_cast<CDVDOverlayImage&>(o);
++    r = COverlay::Create(ovImage, m_rs);
++    if (r && o.IsBitmapSubtitle())
++    {
++      r->m_isBitmapSubtitle = true;
++      r->m_contentInset = MeasureContentInset(ovImage);
++    }
++  }
+   else if (o.IsOverlayType(DVDOVERLAY_TYPE_SPU))
++  {
+     r = COverlay::Create(static_cast<CDVDOverlaySpu&>(o));
++    // COverlayTexture already crops an SPU to its visible pixels, so the
++    // content fills the quad and the default inset is correct.
++    if (r && o.IsBitmapSubtitle())
++      r->m_isBitmapSubtitle = true;
++  }
+ 
+   m_textureCache[m_textureid] = r;
+   o.m_textureid = m_textureid;
+@@ -693,5 +936,7 @@ void CRenderer::LoadSettings()
+   const auto settings{CServiceBroker::GetSettingsComponent()->GetSubtitlesSettings()};
+   m_subtitleHorizontalAlign = settings->GetHorizontalAlignment();
+   m_subtitleAlign = settings->GetAlignment();
++  m_bitmapZoomPerc = settings->GetBitmapZoomPerc();
++  m_bitmapPosition = settings->IsBitmapPositionEnabled();
+   ResetSubtitlePosition();
+ }
+diff --git a/xbmc/cores/VideoPlayer/VideoRenderers/OverlayRenderer.h b/xbmc/cores/VideoPlayer/VideoRenderers/OverlayRenderer.h
+index f0d0af5af7..e51f9c6920 100644
+--- a/xbmc/cores/VideoPlayer/VideoRenderers/OverlayRenderer.h
++++ b/xbmc/cores/VideoPlayer/VideoRenderers/OverlayRenderer.h
+@@ -15,6 +15,7 @@
+ #include "settings/SubtitlesSettings.h"
+ #include "threads/CriticalSection.h"
+ #include "utils/Observer.h"
++#include "windowing/Resolution.h"
+ 
+ #include <atomic>
+ #include <map>
+@@ -40,6 +41,20 @@ namespace OVERLAY {
+     float height;
+   };
+ 
++  /*!
++   * \brief The part of an overlay quad that carries visible pixels, as
++   *  fractions of the quad measured inward from each edge. All zero means the
++   *  bitmap fills its quad, which is what a tightly cropped PGS or VobSub
++   *  object does and therefore the overwhelmingly common case.
++   */
++  struct SContentInset
++  {
++    float left{0.0f};
++    float top{0.0f};
++    float right{0.0f};
++    float bottom{0.0f};
++  };
++
+   /*!
+    * \brief Mark the entire GUI dirty so the next render pass runs
+    *  (not skipped). Overlays (subtitles, debug OSD) are not CGUIControls
+@@ -90,8 +105,16 @@ namespace OVERLAY {
+     float m_source_height{0}; // Video source height resolution used to calculate aspect ratio
+ 
+     int m_3dSubtitleDepth{0};
++    bool m_3dSubtitleDepthAuthored{false};
+     bool m_pgsSubtitle{false};
+ 
++    // True only for a picture of subtitle text (PGS, VobSub). Menu graphics
++    // reach the renderer through the same classes and must not be resized or
++    // moved by the subtitle settings.
++    bool m_isBitmapSubtitle{false};
++    // Where the visible pixels sit inside the quad above
++    SContentInset m_contentInset;
++
+   protected:
+     /*!
+      * \brief Given the resolution ratio determines if it is a 4/3 resolution
+@@ -187,7 +210,47 @@ namespace OVERLAY {
+       float renderedFrameHeight{0.0f};
+     };
+ 
+-    void Render(COverlay* o);
++    /*!
++     * \brief One overlay resolved to the screen geometry it will be drawn with.
++     *  Bitmap subtitle repositioning needs every overlay on screen this frame
++     *  before it can decide how far to move any of them, so the geometry is
++     *  computed for the whole frame first and drawn afterwards.
++     */
++    struct SRenderItem
++    {
++      std::shared_ptr<COverlay> overlay;
++      SRenderState state;
++    };
++
++    /*!
++     * \brief Resolve an overlay's placement into screen pixels
++     * \param o The overlay
++     * \param state Filled with the position and size to draw at
++     */
++    void GetRenderState(COverlay* o, SRenderState& state) const;
++
++    /*!
++     * \brief The rectangle covered by an overlay's visible pixels
++     * \param o The overlay
++     * \param state The placement returned by GetRenderState
++     * \return The content rectangle in screen pixels
++     */
++    static CRect GetContentRect(const COverlay& o, const SRenderState& state);
++
++    /*!
++     * \brief Move bitmap subtitles onto the line set by the subtitle position
++     *        and vertical margin settings
++     *
++     *  Subtitles whose content sits in the lower half of the frame are moved
++     *  up from the bottom edge, those in the upper half down from the top
++     *  edge. Overlays that are too tall to be a line of text, or that straddle
++     *  the middle of the frame, are left alone: they are graphics, not
++     *  dialogue. Does nothing unless the setting is enabled.
++     *
++     * \param items The overlays to be drawn this frame, adjusted in place
++     */
++    void RepositionBitmapSubtitles(std::vector<SRenderItem>& items) const;
++
+     std::shared_ptr<COverlay> Convert(SElement& e);
+     // Build a COverlay (cached or freshly created) from the libass output
+     // already produced by PrepareOverlays. Does not call ass_render_frame.
+@@ -204,6 +267,13 @@ namespace OVERLAY {
+      */
+     void LoadSettings();
+ 
++    /*!
++     * \brief Bring the cached subtitle position in line with the resolution
++     *        info, saving a pending user change back to it first
++     * \return The current resolution info
++     */
++    RESOLUTION_INFO SyncSubtitlePosition();
++
+     enum PositonResInfoState
+     {
+       POSRESINFO_UNSET = -1,
+@@ -228,6 +298,10 @@ namespace OVERLAY {
+     KODI::SUBTITLES::HorizontalAlign m_subtitleHorizontalAlign{
+         KODI::SUBTITLES::HorizontalAlign::CENTER};
+     KODI::SUBTITLES::Align m_subtitleAlign{KODI::SUBTITLES::Align::BOTTOM_OUTSIDE};
++    // Zoom applied to bitmap subtitles, in %, 100 meaning the authored size
++    int m_bitmapZoomPerc{100};
++    // Whether the subtitle position and margin also apply to bitmap subtitles
++    bool m_bitmapPosition{false};
+ 
+     std::shared_ptr<struct KODI::SUBTITLES::STYLE::style> m_overlayStyle;
+     std::atomic<bool> m_isSettingsChanged{false};
+diff --git a/xbmc/cores/VideoPlayer/VideoRenderers/OverlayRendererUtil.cpp b/xbmc/cores/VideoPlayer/VideoRenderers/OverlayRendererUtil.cpp
+index 262c256963..b0abe9865a 100644
+--- a/xbmc/cores/VideoPlayer/VideoRenderers/OverlayRendererUtil.cpp
++++ b/xbmc/cores/VideoPlayer/VideoRenderers/OverlayRendererUtil.cpp
+@@ -17,6 +17,9 @@
+ #include "windowing/GraphicContext.h"
+ #include "windowing/WinSystem.h"
+ 
++#include <cmath>
++
++
+ namespace OVERLAY
+ {
+ 
+@@ -272,7 +275,7 @@ bool convert_quad(ASS_Image* images, SQuads& quads, int max_x)
+   return true;
+ }
+ 
+-int GetStereoscopicDepth(bool isPgs, int subtitleDepth)
++int GetStereoscopicDepth(bool isPgs, int subtitleDepth, bool authoredDepth)
+ {
+   auto stereo_mode = CServiceBroker::GetWinSystem()->GetGfxContext().GetStereoMode();
+ 
+@@ -283,13 +286,21 @@ int GetStereoscopicDepth(bool isPgs, int subtitleDepth)
+     return 0;
+   }
+ 
+-  // get configured depth
+-  int depth = CServiceBroker::GetSettingsComponent()->GetSettings()->GetInt(CSettings::SETTING_SUBTITLES_STEREOSCOPICDEPTH);
++  const auto settings = CServiceBroker::GetSettingsComponent()->GetSettings();
+ 
+-  // in case of MVC playback and PGS subtitles, use the subtitle depth info additionally to the configured one
+-  if(stereo_mode == RenderStereoMode::HARDWAREBASED && isPgs)
++  int depth;
++  if (stereo_mode == RenderStereoMode::HARDWAREBASED && isPgs && authoredDepth)
++  {
++    // The fixed setting is deliberately not added as well: it is the fallback
++    // for discs that author nothing, and both together would double-count.
++    // Authored offsets are relative to a 1920 wide plane.
++    const float scale = CServiceBroker::GetWinSystem()->GetGfxContext().GetWidth() / 1920.0f;
++    depth = static_cast<int>(std::lround(subtitleDepth * scale)) +
++            settings->GetInt(CSettings::SETTING_SUBTITLES_STEREOSCOPICDEPTHADJUST);
++  }
++  else
+   {
+-    depth += subtitleDepth;
++    depth = settings->GetInt(CSettings::SETTING_SUBTITLES_STEREOSCOPICDEPTH);
+   }
+ 
+   // correct depth according to the current left/right eye view
+diff --git a/xbmc/cores/VideoPlayer/VideoRenderers/OverlayRendererUtil.h b/xbmc/cores/VideoPlayer/VideoRenderers/OverlayRendererUtil.h
+index e2580ca595..215927b061 100644
+--- a/xbmc/cores/VideoPlayer/VideoRenderers/OverlayRendererUtil.h
++++ b/xbmc/cores/VideoPlayer/VideoRenderers/OverlayRendererUtil.h
+@@ -45,6 +45,6 @@ void convert_rgba(const CDVDOverlaySpu& o,
+                   int& max_y,
+                   std::vector<uint32_t>& rgba);
+ bool convert_quad(ASS_Image* images, SQuads& quads, int max_x);
+-int GetStereoscopicDepth(bool isPgs, int subtitleDepth);
++int GetStereoscopicDepth(bool isPgs, int subtitleDepth, bool authoredDepth);
+ 
+ } // namespace OVERLAY
+diff --git a/xbmc/input/actions/ActionIDs.h b/xbmc/input/actions/ActionIDs.h
+index 039666b978..f4b380fbf7 100644
+--- a/xbmc/input/actions/ActionIDs.h
++++ b/xbmc/input/actions/ActionIDs.h
+@@ -442,6 +442,15 @@ constexpr const int ACTION_VIDEO_NEXT_STREAM = 250;
+ //! Used to queue an item to the next position in the playlist
+ constexpr const int ACTION_QUEUE_ITEM_NEXT = 251;
+ 
++//! Enlarge picture based subtitles (PGS, VobSub). Used in videofullscreen.
++constexpr const int ACTION_SUBTITLE_BITMAP_ZOOM_IN = 252;
++
++//! Shrink picture based subtitles (PGS, VobSub). Used in videofullscreen.
++constexpr const int ACTION_SUBTITLE_BITMAP_ZOOM_OUT = 253;
++
++//! Toggle whether the subtitle position applies to picture based subtitles
++constexpr const int ACTION_SUBTITLE_BITMAP_POSITION = 254;
++
+ constexpr const int ACTION_HDR_TOGGLE = 260; //!< Toggle display HDR on/off
+ 
+ constexpr const int ACTION_CYCLE_TONEMAP_METHOD = 261; //!< Switch to next tonemap method
+diff --git a/xbmc/input/actions/ActionTranslator.cpp b/xbmc/input/actions/ActionTranslator.cpp
+index 242f63cae0..1a5036a2c4 100644
+--- a/xbmc/input/actions/ActionTranslator.cpp
++++ b/xbmc/input/actions/ActionTranslator.cpp
+@@ -102,6 +102,9 @@ constexpr auto ActionMappings = make_map<ActionName, ActionID>({
+     {"subtitleshiftup", ACTION_SUBTITLE_VSHIFT_UP},
+     {"subtitleshiftdown", ACTION_SUBTITLE_VSHIFT_DOWN},
+     {"subtitlealign", ACTION_SUBTITLE_ALIGN},
++    {"subtitlebitmapzoomin", ACTION_SUBTITLE_BITMAP_ZOOM_IN},
++    {"subtitlebitmapzoomout", ACTION_SUBTITLE_BITMAP_ZOOM_OUT},
++    {"subtitlebitmapposition", ACTION_SUBTITLE_BITMAP_POSITION},
+     {"audionextlanguage", ACTION_AUDIO_NEXT_LANGUAGE},
+     {"verticalshiftup", ACTION_VSHIFT_UP},
+     {"verticalshiftdown", ACTION_VSHIFT_DOWN},
+diff --git a/xbmc/interfaces/builtins/PlayerBuiltins.cpp b/xbmc/interfaces/builtins/PlayerBuiltins.cpp
+index e4e9906824..fef95910e7 100644
+--- a/xbmc/interfaces/builtins/PlayerBuiltins.cpp
++++ b/xbmc/interfaces/builtins/PlayerBuiltins.cpp
+@@ -762,6 +762,24 @@ static int SubtitleShiftUp(const std::vector<std::string>& params)
+   return 0;
+ }
+ 
++static int SubtitleBitmapZoomIn(const std::vector<std::string>& params)
++{
++  CPlayerController::GetInstance().OnAction(CAction{ACTION_SUBTITLE_BITMAP_ZOOM_IN});
++  return 0;
++}
++
++static int SubtitleBitmapZoomOut(const std::vector<std::string>& params)
++{
++  CPlayerController::GetInstance().OnAction(CAction{ACTION_SUBTITLE_BITMAP_ZOOM_OUT});
++  return 0;
++}
++
++static int SubtitleBitmapPosition(const std::vector<std::string>& params)
++{
++  CPlayerController::GetInstance().OnAction(CAction{ACTION_SUBTITLE_BITMAP_POSITION});
++  return 0;
++}
++
+ static int SubtitleShiftDown(const std::vector<std::string>& params)
+ {
+   CAction action{ACTION_SUBTITLE_VSHIFT_DOWN};
+@@ -888,6 +906,24 @@ static int SubtitleShiftDown(const std::vector<std::string>& params)
+ ///     @param[in] save                  "save" to keep the change permanently (optional)
+ ///   }
+ ///   \table_row2_l{
++///     <b>`SubtitleBitmapZoomIn()`</b>
++///     ,
++///     Enlarge picture based subtitles (PGS\, VobSub) by one step of the
++///     "Bitmap subtitle zoom" setting. Has no effect on text based subtitles.
++///   }
++///   \table_row2_l{
++///     <b>`SubtitleBitmapZoomOut()`</b>
++///     ,
++///     Shrink picture based subtitles (PGS\, VobSub) by one step of the
++///     "Bitmap subtitle zoom" setting. Has no effect on text based subtitles.
++///   }
++///   \table_row2_l{
++///     <b>`SubtitleBitmapPosition()`</b>
++///     ,
++///     Toggle whether "Position on screen" and "Vertical margin" are applied to
++///     picture based subtitles (PGS\, VobSub).
++///   }
++///   \table_row2_l{
+ ///     <b>`Seek(seconds)`</b>
+ ///     ,
+ ///     Seeks to the specified relative amount of seconds within the current
+@@ -934,6 +970,9 @@ CBuiltins::CommandMap CPlayerBuiltins::GetOperations() const
+            {"seek",                {"Performs a seek in seconds on the current playing media file", 1, Seek}},
+            {"subtitleshiftup",     {"Shift up the subtitle position", 0, SubtitleShiftUp}},
+            {"subtitleshiftdown",   {"Shift down the subtitle position", 0, SubtitleShiftDown}},
++           {"subtitlebitmapzoomin", {"Enlarge picture based subtitles", 0, SubtitleBitmapZoomIn}},
++           {"subtitlebitmapzoomout", {"Shrink picture based subtitles", 0, SubtitleBitmapZoomOut}},
++           {"subtitlebitmapposition", {"Toggle applying the subtitle position to picture based subtitles", 0, SubtitleBitmapPosition}},
+          };
+ }
+ // clang-format on
+diff --git a/xbmc/settings/Settings.h b/xbmc/settings/Settings.h
+index 70635c53f9..e754cc6e92 100644
+--- a/xbmc/settings/Settings.h
++++ b/xbmc/settings/Settings.h
+@@ -166,6 +166,8 @@ public:
+   static constexpr auto SETTING_SUBTITLES_CAPTIONSIMPAIRED = "subtitles.captionsimpaired";
+   static constexpr auto SETTING_SUBTITLES_ALIGN = "subtitles.align";
+   static constexpr auto SETTING_SUBTITLES_STEREOSCOPICDEPTH = "subtitles.stereoscopicdepth";
++  static constexpr auto SETTING_SUBTITLES_STEREOSCOPICDEPTHADJUST =
++      "subtitles.stereoscopicdepthadjust";
+   static constexpr auto SETTING_SUBTITLES_FONTNAME = "subtitles.fontname";
+   static constexpr auto SETTING_SUBTITLES_FONTSIZE = "subtitles.fontsize";
+   static constexpr auto SETTING_SUBTITLES_STYLE = "subtitles.style";
+@@ -182,6 +184,8 @@ public:
+   static constexpr auto SETTING_SUBTITLES_BGCOLOR = "subtitles.bgcolorpick";
+   static constexpr auto SETTING_SUBTITLES_BGOPACITY = "subtitles.bgopacity";
+   static constexpr auto SETTING_SUBTITLES_MARGINVERTICAL = "subtitles.marginvertical";
++  static constexpr auto SETTING_SUBTITLES_BITMAPZOOM = "subtitles.bitmapzoom";
++  static constexpr auto SETTING_SUBTITLES_BITMAPPOSITION = "subtitles.bitmapposition";
+   static constexpr auto SETTING_SUBTITLES_CHARSET = "subtitles.charset";
+   static constexpr auto SETTING_SUBTITLES_OVERRIDEFONTS = "subtitles.overridefonts";
+   static constexpr auto SETTING_SUBTITLES_OVERRIDESTYLES = "subtitles.overridestyles";
+diff --git a/xbmc/settings/SubtitlesSettings.cpp b/xbmc/settings/SubtitlesSettings.cpp
+index 91cef2f089..5aae4021b1 100644
+--- a/xbmc/settings/SubtitlesSettings.cpp
++++ b/xbmc/settings/SubtitlesSettings.cpp
+@@ -36,6 +36,7 @@ CSubtitlesSettings::CSubtitlesSettings(const std::shared_ptr<CSettings>& setting
+        CSettings::SETTING_SUBTITLES_BACKGROUNDTYPE, CSettings::SETTING_SUBTITLES_SHADOWCOLOR,
+        CSettings::SETTING_SUBTITLES_SHADOWOPACITY,  CSettings::SETTING_SUBTITLES_SHADOWSIZE,
+        CSettings::SETTING_SUBTITLES_MARGINVERTICAL, CSettings::SETTING_SUBTITLES_CHARSET,
++       CSettings::SETTING_SUBTITLES_BITMAPZOOM,     CSettings::SETTING_SUBTITLES_BITMAPPOSITION,
+        CSettings::SETTING_SUBTITLES_OVERRIDEFONTS,  CSettings::SETTING_SUBTITLES_OVERRIDESTYLES,
+        CSettings::SETTING_SUBTITLES_LANGUAGES,      CSettings::SETTING_SUBTITLES_STORAGEMODE,
+        CSettings::SETTING_SUBTITLES_CUSTOMPATH,     CSettings::SETTING_SUBTITLES_PAUSEONSEARCH,
+@@ -175,6 +176,16 @@ float CSubtitlesSettings::GetVerticalMarginPerc() const
+   return static_cast<float>(m_settings->GetNumber(CSettings::SETTING_SUBTITLES_MARGINVERTICAL));
+ }
+ 
++int CSubtitlesSettings::GetBitmapZoomPerc() const
++{
++  return m_settings->GetInt(CSettings::SETTING_SUBTITLES_BITMAPZOOM);
++}
++
++bool CSubtitlesSettings::IsBitmapPositionEnabled() const
++{
++  return m_settings->GetBool(CSettings::SETTING_SUBTITLES_BITMAPPOSITION);
++}
++
+ void CSubtitlesSettings::SettingOptionsSubtitleFontsFiller(const SettingConstPtr& setting,
+                                                            std::vector<StringSettingOption>& list,
+                                                            std::string& current)
+diff --git a/xbmc/settings/SubtitlesSettings.h b/xbmc/settings/SubtitlesSettings.h
+index bbe615f3db..653354f6d8 100644
+--- a/xbmc/settings/SubtitlesSettings.h
++++ b/xbmc/settings/SubtitlesSettings.h
+@@ -202,6 +202,19 @@ public:
+    */
+   float GetVerticalMarginPerc() const;
+ 
++  /*!
++   * \brief Get the zoom factor to be applied to bitmap subtitles
++   * \return The zoom factor in %, 100 meaning the authored size
++   */
++  int GetBitmapZoomPerc() const;
++
++  /*!
++   * \brief Check whether the subtitle position and vertical margin settings
++   *        should also be applied to bitmap subtitles
++   * \return True if bitmap subtitles must be repositioned, otherwise false
++   */
++  bool IsBitmapPositionEnabled() const;
++
+   static void SettingOptionsSubtitleFontsFiller(const std::shared_ptr<const CSetting>& setting,
+                                                 std::vector<StringSettingOption>& list,
+                                                 std::string& current);
+diff --git a/xbmc/video/PlayerController.cpp b/xbmc/video/PlayerController.cpp
+index ece31d4645..22c53b5f8c 100644
+--- a/xbmc/video/PlayerController.cpp
++++ b/xbmc/video/PlayerController.cpp
+@@ -28,6 +28,7 @@
+ #include "settings/Settings.h"
+ #include "settings/SettingsComponent.h"
+ #include "settings/SubtitlesSettings.h"
++#include "settings/lib/Setting.h"
+ #include "utils/StringUtils.h"
+ #include "utils/Variant.h"
+ #include "video/PlayerControllerActions.h"
+@@ -39,6 +40,8 @@
+ 
+ #include <algorithm>
+ 
++#include <algorithm>
++
+ using namespace KODI;
+ using namespace UTILS;
+ 
+@@ -491,6 +494,46 @@ bool CPlayerController::OnAction(const CAction &action)
+         return true;
+       }
+ 
++      case ACTION_SUBTITLE_BITMAP_ZOOM_IN:
++      case ACTION_SUBTITLE_BITMAP_ZOOM_OUT:
++      {
++        // Take the bounds from the setting rather than repeating them here, and
++        // set it through the settings manager so the renderer is notified
++        // exactly as it is for a change made in the GUI or over JSON-RPC.
++        const auto setting{std::static_pointer_cast<CSettingInt>(
++            CServiceBroker::GetSettingsComponent()->GetSettings()->GetSetting(
++                CSettings::SETTING_SUBTITLES_BITMAPZOOM))};
++        if (!setting)
++          return true;
++
++        // Deliberately not the setting's own step: that is 1% so the slider can
++        // be adjusted finely, and a button that moves the size by 1% a press
++        // reads as doing nothing at all.
++        constexpr int zoomStep{5};
++        const int step{action.GetID() == ACTION_SUBTITLE_BITMAP_ZOOM_IN ? zoomStep : -zoomStep};
++        const int zoom{
++            std::clamp(setting->GetValue() + step, setting->GetMinimum(), setting->GetMaximum())};
++        setting->SetValue(zoom);
++
++        ShowSlider(action.GetID(), 39213, static_cast<float>(zoom),
++                   static_cast<float>(setting->GetMinimum()), static_cast<float>(zoomStep),
++                   static_cast<float>(setting->GetMaximum()));
++        return true;
++      }
++
++      case ACTION_SUBTITLE_BITMAP_POSITION:
++      {
++        const auto settings{CServiceBroker::GetSettingsComponent()->GetSettings()};
++        const bool enabled{!settings->GetBool(CSettings::SETTING_SUBTITLES_BITMAPPOSITION)};
++        settings->SetBool(CSettings::SETTING_SUBTITLES_BITMAPPOSITION, enabled);
++
++        const auto& strings{CServiceBroker::GetResourcesComponent().GetLocalizeStrings()};
++        CGUIDialogKaiToast::QueueNotification(CGUIDialogKaiToast::Info, strings.Get(39215),
++                                              strings.Get(enabled ? 305 : 13106),
++                                              TOAST_DISPLAY_TIME, false);
++        return true;
++      }
++
+       case ACTION_SUBTITLE_ALIGN:
+       {
+         const auto settings{CServiceBroker::GetSettingsComponent()->GetSubtitlesSettings()};

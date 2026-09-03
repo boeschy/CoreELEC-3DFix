@@ -3,11 +3,11 @@
 # Copyright (C) 2018-present Team LibreELEC (https://libreelec.tv)
 
 PKG_NAME="libbluray"
-PKG_VERSION="1.5.0"
-PKG_SHA256="f676408e91a5d321abf8b8d4dfdae36205c297dab5c54c3ec519639025f474a2"
+PKG_VERSION="1.5.1"
+PKG_SHA256="4bf093f2f7b247d7154a978b8137890088ac0fea993da12aa0b953d9220530f7"
 PKG_LICENSE="LGPL-2.1-or-later"
 PKG_SITE="https://www.videolan.org/developers/libbluray.html"
-PKG_URL="http://download.videolan.org/pub/videolan/libbluray/${PKG_VERSION}/${PKG_NAME}-${PKG_VERSION}.tar.xz"
+PKG_URL="https://code.videolan.org/videolan/libbluray/-/archive/master/${PKG_NAME}-${PKG_VERSION}.tar.gz"
 PKG_DEPENDS_TARGET="toolchain fontconfig freetype libxml2 libudfread"
 PKG_LONGDESC="libbluray is an open-source library designed for Blu-Ray Discs playback for media players."
 

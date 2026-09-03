@@ -1,0 +1,68 @@
+diff --git a/xbmc/filesystem/BlurayDirectory.cpp b/xbmc/filesystem/BlurayDirectory.cpp
+index 0210fad7bb..653a665897 100644
+--- a/xbmc/filesystem/BlurayDirectory.cpp
++++ b/xbmc/filesystem/BlurayDirectory.cpp
+@@ -216,9 +216,12 @@ void RemoveDuplicatePlaylists(std::vector<PlaylistInformation>& playlists)
+           playlists[i].audioStreams == playlists[j].audioStreams &&
+           playlists[i].pgStreams == playlists[j].pgStreams &&
+           playlists[i].chapters == playlists[j].chapters &&
+-          playlists[i].clips == playlists[j].clips)
++          playlists[i].clips == playlists[j].clips &&
++          playlists[i].hasStereoscopicVideo == playlists[j].hasStereoscopicVideo)
+       {
+-        duplicatePlaylists.emplace(std::max(playlists[i].playlist, playlists[j].playlist));
++        const unsigned int duplicate{std::max(playlists[i].playlist, playlists[j].playlist)};
++        if (duplicatePlaylists.emplace(duplicate).second)
++          CLog::LogF(LOGDEBUG, "Discarding playlist {} - duplicate", duplicate);
+       }
+     }
+   }
+diff --git a/xbmc/filesystem/DiscDirectoryHelper.cpp b/xbmc/filesystem/DiscDirectoryHelper.cpp
+index c4608a8f2f..e0239cbaf7 100644
+--- a/xbmc/filesystem/DiscDirectoryHelper.cpp
++++ b/xbmc/filesystem/DiscDirectoryHelper.cpp
+@@ -2439,6 +2439,8 @@ bool IsSamePresentation(const PlaylistInformation& a,
+ {
+   if (a.duration != b.duration)
+     return false;
++  if (a.hasStereoscopicVideo != b.hasStereoscopicVideo)
++    return false;
+   if (a.clips == b.clips)
+     return true;
+   if (aClipDurations.size() < 2 || a.chapters.size() != b.chapters.size() ||
+diff --git a/xbmc/filesystem/DiscDirectoryHelper.h b/xbmc/filesystem/DiscDirectoryHelper.h
+index d39bdb225f..6400801213 100644
+--- a/xbmc/filesystem/DiscDirectoryHelper.h
++++ b/xbmc/filesystem/DiscDirectoryHelper.h
+@@ -122,6 +122,9 @@ struct PlaylistInformation
+   //! picture-in-picture (see IsPictureInPicturePresentation)
+   bool hasSecondaryVideo{false};
+ 
++  //! Whether the playlist carries a stereoscopic (BD-3D MVC) dependent view in an extension sub-path
++  bool hasStereoscopicVideo{false};
++
+   void clear()
+   {
+     playlist = 0;
+@@ -134,6 +137,7 @@ struct PlaylistInformation
+     pgStreams.clear();
+     languages.clear();
+     hasSecondaryVideo = false;
++    hasStereoscopicVideo = false;
+   }
+ };
+ 
+diff --git a/xbmc/filesystem/bluray/StreamParser.cpp b/xbmc/filesystem/bluray/StreamParser.cpp
+index 15fcbe3ff7..a6f948ff6d 100644
+--- a/xbmc/filesystem/bluray/StreamParser.cpp
++++ b/xbmc/filesystem/bluray/StreamParser.cpp
+@@ -360,6 +360,9 @@ void CStreamParser::ConvertBlurayPlaylistInformation(const BlurayPlaylistInforma
+     p.clipDuration[clip.clip] = clip.duration;
+   }
+ 
++  // Extension sub-paths hold the MVC dependent view, telling a 3D playlist from its 2D twin
++  p.hasStereoscopicVideo = !b.extensionSubPlayItems.empty();
++
+   const DefaultStreams defaults{GetDefaultStreams(b)};
+ 
+   // The PlayItem's stream number table is what the playlist exposes, and in stream number order.

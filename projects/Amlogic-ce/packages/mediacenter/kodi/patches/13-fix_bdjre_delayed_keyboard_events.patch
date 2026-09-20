@@ -1,0 +1,284 @@
+diff --git a/xbmc/cores/VideoPlayer/DVDCodecs/Video/AMLCodec.cpp b/xbmc/cores/VideoPlayer/DVDCodecs/Video/AMLCodec.cpp
+index 40f84aa46b..002675760f 100644
+--- a/xbmc/cores/VideoPlayer/DVDCodecs/Video/AMLCodec.cpp
++++ b/xbmc/cores/VideoPlayer/DVDCodecs/Video/AMLCodec.cpp
+@@ -2631,6 +2631,9 @@ void CAMLCodec::Reset()
+ 
+ bool CAMLCodec::AddData(uint8_t *pData, size_t iSize, double dts, double pts)
+ {
++  if (iSize == 0)
++    return true;
++
+   int data_len, free_len, size;
+   int chunk_size = calc_chunk_size(iSize);
+   float new_buffer_level = GetBufferLevel(chunk_size, data_len, free_len, size);
+diff --git a/xbmc/cores/VideoPlayer/DVDInputStreams/DVDInputStreamBluray.cpp b/xbmc/cores/VideoPlayer/DVDInputStreams/DVDInputStreamBluray.cpp
+index bc892165d3..6f0a5c7209 100644
+--- a/xbmc/cores/VideoPlayer/DVDInputStreams/DVDInputStreamBluray.cpp
++++ b/xbmc/cores/VideoPlayer/DVDInputStreams/DVDInputStreamBluray.cpp
+@@ -326,7 +326,7 @@ bool CDVDInputStreamBluray::Open()
+   URIUtils::RemoveSlashAtEnd(root);
+ 
+   bd_set_debug_handler(CBlurayCallback::bluray_logger);
+-  bd_set_debug_mask(DBG_CRIT | DBG_BLURAY | DBG_NAV);
++  bd_set_debug_mask(DBG_CRIT | DBG_BLURAY | DBG_NAV | DBG_BDJ);
+ 
+   m_bd = bd_init();
+ 
+@@ -622,9 +622,15 @@ void CDVDInputStreamBluray::ProcessEvent() {
+ 
+   case BD_EVENT_SEEK:
+     CLog::Log(LOGDEBUG, "CDVDInputStreamBluray - BD_EVENT_SEEK");
+-    //m_player->OnDVDNavResult(nullptr, 1);
+-    //bd_read_skip_still(m_bd);
+-    //m_hold = HOLD_HELD;
++    if (m_bMVCPlayback && m_titleInfo && m_clip)
++    {
++      EMPTY_QUEUE(m_clipQueue);
++      m_clipQueue.push(static_cast<int>(m_clip - m_titleInfo->clips));
++      if (OpenNextStream())
++        SeekMVCDemux(std::max<int64_t>(0, static_cast<int64_t>(m_event.param) / 45 -
++                                            m_clipStartTime));
++      m_player->OnDiscNavResult(nullptr, BD_EVENT_SEEK);
++    }
+     break;
+ 
+   case BD_EVENT_STILL_TIME:
+@@ -1427,6 +1433,28 @@ CDVDInputStream::ENextStream CDVDInputStreamBluray::NextStream()
+   return NEXTSTREAM_OPEN;
+ }
+ 
++void CDVDInputStreamBluray::ProcessPendingEvents()
++{
++  if (m_bd == nullptr || !m_navmode || m_hold == HOLD_EXIT || m_hold == HOLD_ERROR ||
++      m_event.event != BD_EVENT_NONE)
++    return;
++
++  while (bd_get_event(m_bd, &m_event))
++  {
++    if ((m_hold != HOLD_DATA &&
++         (m_event.event == BD_EVENT_SEEK || m_event.event == BD_EVENT_TITLE ||
++          m_event.event == BD_EVENT_ANGLE || m_event.event == BD_EVENT_PLAYLIST ||
++          m_event.event == BD_EVENT_PLAYITEM)) ||
++        (m_event.event == BD_EVENT_STILL_TIME && m_hold != HOLD_STILL))
++    {
++      m_hold = HOLD_HELD;
++      return;
++    }
++
++    ProcessEvent();
++  }
++}
++
+ void CDVDInputStreamBluray::UserInput(bd_vk_key_e vk)
+ {
+   if(m_bd == nullptr || !m_navmode)
+@@ -1439,9 +1467,7 @@ void CDVDInputStreamBluray::UserInput(bd_vk_key_e vk)
+   }
+   else
+   {
+-    /* process all queued up events */
+-    while (bd_get_event(m_bd, &m_event))
+-      ProcessEvent();
++    ProcessPendingEvents();
+   }
+ }
+ 
+diff --git a/xbmc/cores/VideoPlayer/DVDInputStreams/DVDInputStreamBluray.h b/xbmc/cores/VideoPlayer/DVDInputStreams/DVDInputStreamBluray.h
+index be84eb6577..01cd1ebe90 100644
+--- a/xbmc/cores/VideoPlayer/DVDInputStreams/DVDInputStreamBluray.h
++++ b/xbmc/cores/VideoPlayer/DVDInputStreams/DVDInputStreamBluray.h
+@@ -191,6 +191,12 @@ public:
+   BLURAY_TITLE_INFO* GetTitleLongest();
+   BLURAY_TITLE_INFO* GetTitleFile(const std::string& name);
+ 
++  void ProcessPendingEvents();
++  bool CanResyncBDJStreams() const
++  {
++    return m_navmode && m_title && m_title->bdj && !m_isInMainMenu &&
++           m_hold == HOLD_NONE && m_event.event == BD_EVENT_NONE;
++  }
+   void ProcessEvent();
+   CDVDDemux* GetExtentionDemux() override { return m_pMVCDemux; };
+   bool HasExtention() override { return m_bMVCPlayback && m_pMVCDemux != nullptr; }
+diff --git a/xbmc/cores/VideoPlayer/DVDMessage.h b/xbmc/cores/VideoPlayer/DVDMessage.h
+index d619e15bf0..70ca8622ff 100644
+--- a/xbmc/cores/VideoPlayer/DVDMessage.h
++++ b/xbmc/cores/VideoPlayer/DVDMessage.h
+@@ -58,6 +58,7 @@ public:
+     // demuxer related messages
+     DEMUXER_PACKET,                 // data packet
+     DEMUXER_RESET,                  // reset the demuxer
++    DEMUXER_FLUSH,
+ 
+     // video related messages
+     VIDEO_SET_ASPECT,               // set aspectratio of video
+diff --git a/xbmc/cores/VideoPlayer/DVDMessageQueue.cpp b/xbmc/cores/VideoPlayer/DVDMessageQueue.cpp
+index 7b2bade5e6..4762ad73a6 100644
+--- a/xbmc/cores/VideoPlayer/DVDMessageQueue.cpp
++++ b/xbmc/cores/VideoPlayer/DVDMessageQueue.cpp
+@@ -174,7 +174,9 @@ MsgQueueReturnCode CDVDMessageQueue::Get(std::shared_ptr<CDVDMsg>& pMsg,
+ 
+   while (!m_bAbortRequest)
+   {
+-    std::list<DVDMessageListItem> &msgs = (priority > 0 || !m_prioMessages.empty()) ? m_prioMessages : m_messages;
++    std::list<DVDMessageListItem>& msgs =
++        (!m_prioMessages.empty() || (priority > 0 && !m_drain)) ? m_prioMessages
++                                                             : m_messages;
+ 
+     if (!msgs.empty() && (msgs.back().priority >= priority || m_drain))
+     {
+diff --git a/xbmc/cores/VideoPlayer/VideoPlayer.cpp b/xbmc/cores/VideoPlayer/VideoPlayer.cpp
+index a56db38d05..9f14af804a 100644
+--- a/xbmc/cores/VideoPlayer/VideoPlayer.cpp
++++ b/xbmc/cores/VideoPlayer/VideoPlayer.cpp
+@@ -1718,6 +1718,7 @@ void CVideoPlayer::Process()
+   CServiceBroker::GetWinSystem()->RegisterRenderLoop(this);
+ 
+   Prepare();
++  std::weak_ptr<CDVDInputStream> pendingStreamOpen;
+ 
+   while (!m_bAbortRequest)
+   {
+@@ -1731,12 +1732,40 @@ void CVideoPlayer::Process()
+     // check if in an edit (cut or commercial break) that should be automatically skipped
+     CheckAutoSceneSkip();
+ 
++#if defined(HAVE_LIBBLURAY)
++    if (m_pInputStream && m_pInputStream->IsStreamType(DVDSTREAM_TYPE_BLURAY))
++    {
++      std::static_pointer_cast<CDVDInputStreamBluray>(m_pInputStream)->ProcessPendingEvents();
++    }
++#endif
++
+     // handle messages send to this thread, like seek or demuxer reset requests
+     HandleMessages();
+ 
+     if (m_bAbortRequest)
+       break;
+ 
++    if (!m_pDemuxer || pendingStreamOpen.lock() != m_pInputStream)
++      pendingStreamOpen.reset();
++#if defined(HAVE_LIBBLURAY)
++    if (m_blurayStreamChange)
++    {
++      m_blurayStreamChange = false;
++      const auto bluray = std::dynamic_pointer_cast<CDVDInputStreamBluray>(m_pInputStream);
++      if (bluray && m_pDemuxer && pendingStreamOpen.expired() &&
++          m_State.canseek && m_CurrentVideo.syncState == IDVDStreamPlayer::SYNC_INSYNC &&
++          bluray->CanResyncBDJStreams())
++      {
++        CDVDMsgPlayerSeek::CMode mode;
++        mode.time = static_cast<double>(GetUpdatedTime());
++        mode.backward = true;
++        mode.trickplay = true;
++        m_messenger.Put(std::make_shared<CDVDMsgPlayerSeek>(mode));
++        continue;
++      }
++    }
++#endif
++
+     // should we open a new input stream?
+     if (!m_pInputStream)
+     {
+@@ -1827,7 +1856,8 @@ void CVideoPlayer::Process()
+ 
+     DemuxPacket* pPacket = NULL;
+     CDemuxStream *pStream = NULL;
+-    ReadPacket(pPacket, pStream);
++    if (pendingStreamOpen.expired())
++      ReadPacket(pPacket, pStream);
+     if (pPacket && !pStream)
+     {
+       /* probably a empty packet, just free it and move on */
+@@ -1865,12 +1895,27 @@ void CVideoPlayer::Process()
+       }
+ 
+       // if there is another stream available, reopen demuxer
+-      CDVDInputStream::ENextStream next = m_pInputStream->NextStream();
++      const auto next = pendingStreamOpen.expired()
++                            ? m_pInputStream->NextStream()
++                            : CDVDInputStream::NEXTSTREAM_OPEN;
+       if(next == CDVDInputStream::NEXTSTREAM_OPEN)
+       {
++        SetCaching(CACHESTATE_DONE);
++        if (m_pInputStream->IsStreamType(DVDSTREAM_TYPE_BLURAY) &&
++            m_playSpeed == DVD_PLAYSPEED_NORMAL &&
++            ((m_CurrentAudio.syncState == IDVDStreamPlayer::SYNC_INSYNC &&
++              m_VideoPlayerAudio->HasData()) ||
++             (m_CurrentVideo.syncState == IDVDStreamPlayer::SYNC_INSYNC &&
++              m_VideoPlayerVideo->HasData())))
++        {
++          pendingStreamOpen = m_pInputStream;
++          CThread::Sleep(10ms);
++          continue;
++        }
++
++        pendingStreamOpen.reset();
+         CloseDemuxer();
+ 
+-        SetCaching(CACHESTATE_DONE);
+         CLog::Log(LOGINFO, "VideoPlayer: next stream, wait for old streams to be finished");
+         CloseStream(m_CurrentAudio, true);
+         CloseStream(m_CurrentVideo, true);
+@@ -3282,6 +3327,7 @@ void CVideoPlayer::HandleMessages()
+       }
+ 
+       // dvd's will issue a HOP_CHANNEL that we need to skip
++        m_messenger.Flush(CDVDMsg::DEMUXER_FLUSH);
+       if(m_pInputStream->IsStreamType(DVDSTREAM_TYPE_DVD))
+         m_dvd.state = DVDSTATE_SEEK;
+ 
+@@ -3575,6 +3621,14 @@ void CVideoPlayer::HandleMessages()
+ 
+       m_processInfo->SeekFinished(0);
+     }
++    else if (pMsg->IsType(CDVDMsg::DEMUXER_FLUSH))
++    {
++      if (m_pDemuxer)
++      {
++        m_pDemuxer->Flush();
++        FlushBuffers(DVD_NOPTS_VALUE, true, true);
++      }
++    }
+     else if (pMsg->IsType(CDVDMsg::GENERAL_FLUSH))
+     {
+       FlushBuffers(DVD_NOPTS_VALUE, true, true);
+@@ -4875,10 +4929,14 @@ int CVideoPlayer::OnDiscNavResult(void* pData, int iMessage)
+       m_messenger.Put(std::make_shared<CDVDMsg>(CDVDMsg::GENERAL_FLUSH));
+       break;
+     case BD_EVENT_AUDIO_STREAM:
++      m_blurayStreamChange |=
++          m_dvd.iSelectedAudioStream != *static_cast<int*>(pData);
+       m_dvd.iSelectedAudioStream = *static_cast<int*>(pData);
+       break;
+ 
+     case BD_EVENT_PG_TEXTST_STREAM:
++      m_blurayStreamChange |=
++          m_dvd.iSelectedSPUStream != *static_cast<int*>(pData);
+       m_dvd.iSelectedSPUStream = *static_cast<int*>(pData);
+       break;
+     case BD_EVENT_PG_TEXTST:
+@@ -4948,6 +5006,10 @@ int CVideoPlayer::OnDiscNavResult(void* pData, int iMessage)
+                                                          "OnBlurayEncryptedError");
+     }
+     break;
++    case BD_EVENT_SEEK:
++      if (m_pDemuxer)
++        m_messenger.Put(std::make_shared<CDVDMsg>(CDVDMsg::DEMUXER_FLUSH));
++      break;
+     case BD_EVENT_DISCONTINUITY:
+       CLog::Log(LOGDEBUG,
+                 "CVideoPlayer::OnDiscNavResult - libbluray discontinuity detected (DEMUXER_RESET)");
+diff --git a/xbmc/cores/VideoPlayer/VideoPlayer.h b/xbmc/cores/VideoPlayer/VideoPlayer.h
+index d92149302b..639ac5208a 100644
+--- a/xbmc/cores/VideoPlayer/VideoPlayer.h
++++ b/xbmc/cores/VideoPlayer/VideoPlayer.h
+@@ -662,6 +662,7 @@ protected:
+     int iSelectedAudioStream; // mpeg stream id, or -1 if disabled
+     int iSelectedVideoStream; // mpeg stream id or angle, -1 if disabled
+   } m_dvd;
++  bool m_blurayStreamChange = false;
+ 
+   SPlayerState m_State;
+   mutable CCriticalSection m_StateSection;

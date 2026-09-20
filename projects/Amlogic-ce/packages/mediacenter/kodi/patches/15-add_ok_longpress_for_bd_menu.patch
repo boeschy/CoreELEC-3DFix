@@ -1,0 +1,29 @@
+--- a/system/keymaps/keyboard.xml
++++ b/system/keymaps/keyboard.xml
+@@ -416,10 +416,10 @@
+       <enter>OSD</enter>
+       <ok>OSD</ok>
+       <select>OSD</select>
+-      <return mod="longpress">PlayPause</return>
+-      <enter mod="longpress">PlayPause</enter>
+-      <ok mod="longpress">PlayPause</ok>
+-      <select mod="longpress">PlayPause</select>
++      <return mod="longpress">ShowVideoMenu</return>
++      <enter mod="longpress">ShowVideoMenu</enter>
++      <ok mod="longpress">ShowVideoMenu</ok>
++      <select mod="longpress">ShowVideoMenu</select>
+       <m>OSD</m>
+       <menu>OSD</menu>
+       <i>Info</i>
+@@ -673,6 +673,11 @@
+       <return>Select</return>
+       <enter>Select</enter>      <!-- backspace>Fullscreen</backspace -->
+       <ok>Select</ok>
++      <select>Select</select>
++      <return mod="longpress">ShowVideoMenu</return>
++      <enter mod="longpress">ShowVideoMenu</enter>
++      <ok mod="longpress">ShowVideoMenu</ok>
++      <select mod="longpress">ShowVideoMenu</select>
+       <pageup>SkipNext</pageup>
+       <pagedown>SkipPrevious</pagedown>
+       <channel_up>SkipNext</channel_up>

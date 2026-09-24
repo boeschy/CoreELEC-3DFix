@@ -1,0 +1,430 @@
+diff --git a/xbmc/cores/DataCacheCore.cpp b/xbmc/cores/DataCacheCore.cpp
+index cb1a97b411..c2893541e5 100644
+--- a/xbmc/cores/DataCacheCore.cpp
++++ b/xbmc/cores/DataCacheCore.cpp
+@@ -29,6 +29,7 @@ CDataCacheCore& CDataCacheCore::GetInstance()
+ 
+ void CDataCacheCore::Reset()
+ {
++  SetBluray3DNav(false);
+   {
+     std::unique_lock lock(m_stateSection);
+     m_stateInfo = {};
+@@ -50,6 +51,14 @@ void CDataCacheCore::Reset()
+   m_timeInfo = {};
+ }
+ 
++void CDataCacheCore::SetBluray3DNav(bool active)
++{
++  m_bluray3DReady = false;
++  m_bluray3DResolution = RES_INVALID;
++  m_bluray3DNav = active;
++  SignalVideoInfoChange();
++}
++
+ void CDataCacheCore::ResetAudioCache()
+ {
+   {
+diff --git a/xbmc/cores/DataCacheCore.h b/xbmc/cores/DataCacheCore.h
+index b743e555d3..b50927d6de 100644
+--- a/xbmc/cores/DataCacheCore.h
++++ b/xbmc/cores/DataCacheCore.h
+@@ -10,6 +10,7 @@
+ 
+ #include "EdlEdit.h"
+ #include "threads/CriticalSection.h"
++#include "windowing/Resolution.h"
+ 
+ #include <atomic>
+ #include <chrono>
+@@ -24,6 +25,13 @@ public:
+   static CDataCacheCore& GetInstance();
+   void Reset();
+   void ResetAudioCache();
++  void SetBluray3DNav(bool active);
++  bool IsBluray3DNav() const { return m_bluray3DNav.load(); }
++  bool IsBluray3DReady() const { return m_bluray3DReady.load(); }
++  void SetBluray3DReady() { m_bluray3DReady = true; }
++  RESOLUTION GetBluray3DResolution() const { return m_bluray3DResolution.load(); }
++  void SetBluray3DResolution(RESOLUTION resolution) { m_bluray3DResolution = resolution; }
++
+   bool HasAVInfoChanges();
+   void SignalVideoInfoChange();
+   void SignalAudioInfoChange();
+@@ -227,6 +235,9 @@ public:
+   int64_t GetMaxTime();
+ 
+ protected:
++  std::atomic_bool m_bluray3DNav{false};
++  std::atomic_bool m_bluray3DReady{false};
++  std::atomic<RESOLUTION> m_bluray3DResolution{RES_INVALID};
+   std::atomic_bool m_hasAVInfoChanges = false;
+ 
+   CCriticalSection m_videoPlayerSection;
+diff --git a/xbmc/cores/VideoPlayer/DVDInputStreams/DVDInputStreamBluray.cpp b/xbmc/cores/VideoPlayer/DVDInputStreams/DVDInputStreamBluray.cpp
+index a14c7365c0..f8a4e8f280 100644
+--- a/xbmc/cores/VideoPlayer/DVDInputStreams/DVDInputStreamBluray.cpp
++++ b/xbmc/cores/VideoPlayer/DVDInputStreams/DVDInputStreamBluray.cpp
+@@ -16,6 +16,7 @@
+ #include "LangInfo.h"
+ #include "ServiceBroker.h"
+ #include "URL.h"
++#include "cores/DataCacheCore.h"
+ #include "filesystem/BlurayCallback.h"
+ #include "filesystem/SpecialProtocol.h"
+ #include "settings/Settings.h"
+@@ -514,12 +515,15 @@ bool CDVDInputStreamBluray::Open()
+ 
+   OpenNextStream();
+ 
++  CServiceBroker::GetDataCacheCore().SetBluray3DNav(m_navmode && disc_info->content_exist_3D);
++
+   return true;
+ }
+ 
+ // close file and reset everything
+ void CDVDInputStreamBluray::Close()
+ {
++  CServiceBroker::GetDataCacheCore().SetBluray3DNav(false);
+   CloseMVCDemux();
+   FreeTitleInfo();
+ 
+diff --git a/xbmc/cores/VideoPlayer/VideoPlayer.cpp b/xbmc/cores/VideoPlayer/VideoPlayer.cpp
+index 82508f9170..6ec1b30fde 100644
+--- a/xbmc/cores/VideoPlayer/VideoPlayer.cpp
++++ b/xbmc/cores/VideoPlayer/VideoPlayer.cpp
+@@ -4521,6 +4521,14 @@ bool CVideoPlayer::OpenVideoStream(CDVDStreamInfo& hint, bool reset)
+   if(pMenus && pMenus->IsInMenu())
+     hint.stills = true;
+ 
++  const bool isMvc = hint.codec_tag == MKTAG('A', 'M', 'V', 'C') ||
++                     hint.codec_tag == MKTAG('M', 'V', 'C', '1');
++  if (CServiceBroker::GetDataCacheCore().IsBluray3DNav() && !isMvc)
++  {
++    hint.codecOptions |= CODEC_FORCE_SOFTWARE | CODEC_ALLOW_FALLBACK;
++    hint.stereo_mode = "mono";
++  }
++
+   if (hint.stereo_mode.empty())
+   {
+     CGUIComponent *gui = CServiceBroker::GetGUI();
+@@ -4565,7 +4573,8 @@ bool CVideoPlayer::OpenVideoStream(CDVDStreamInfo& hint, bool reset)
+     player->SendMessage(std::make_shared<CDVDMsgBool>(CDVDMsg::GENERAL_PAUSE, m_displayLost), 1);
+ 
+     const std::shared_ptr<CDVDInputStream::IExtentionStream>  pExt = std::dynamic_pointer_cast<CDVDInputStream::IExtentionStream>(m_pInputStream);
+-    if (pExt && !static_cast<IDVDStreamPlayerVideo*>(player)->SupportsExtention())
++    if (pExt && pExt->HasExtention() && isMvc &&
++        !static_cast<IDVDStreamPlayerVideo*>(player)->SupportsExtention())
+       pExt->DisableExtention();
+ 
+     // look for any EDL files
+diff --git a/xbmc/cores/VideoPlayer/VideoPlayerVideo.cpp b/xbmc/cores/VideoPlayer/VideoPlayerVideo.cpp
+index dabd76c920..ab03bcab43 100644
+--- a/xbmc/cores/VideoPlayer/VideoPlayerVideo.cpp
++++ b/xbmc/cores/VideoPlayer/VideoPlayerVideo.cpp
+@@ -144,6 +144,9 @@ bool CVideoPlayerVideo::OpenStream(CDVDStreamInfo hint)
+       CLog::Log(LOGINFO, "CVideoPlayerVideo::OpenStream - could not open video codec");
+     }
+ 
++    if (codec)
++      m_supportsExtention = codec->SupportsExtention();
++
+     SendMessage(std::make_shared<CDVDMsgVideoCodecChange>(hint, std::move(codec)), 0);
+   }
+   else
+@@ -158,6 +161,7 @@ bool CVideoPlayerVideo::OpenStream(CDVDStreamInfo hint)
+       return false;
+     }
+ 
++    m_supportsExtention = codec->SupportsExtention();
+     OpenStream(hint, std::move(codec));
+     CLog::Log(LOGINFO, "Creating video thread");
+     m_messageQueue.Init();
+@@ -263,6 +267,7 @@ void CVideoPlayerVideo::CloseStream(bool bWaitForBuffers)
+ 
+   CLog::Log(LOGINFO, "deleting video codec");
+   m_pVideoCodec.reset();
++  m_supportsExtention = false;
+ 
+   if (m_picture.videoBuffer)
+   {
+diff --git a/xbmc/cores/VideoPlayer/VideoPlayerVideo.h b/xbmc/cores/VideoPlayer/VideoPlayerVideo.h
+index 556e22580a..6c7c7deff5 100644
+--- a/xbmc/cores/VideoPlayer/VideoPlayerVideo.h
++++ b/xbmc/cores/VideoPlayer/VideoPlayerVideo.h
+@@ -73,7 +73,7 @@ public:
+   std::string GetPlayerInfo() override;
+   int GetVideoBitrate() override;
+   void SetSpeed(int iSpeed) override;
+-  bool SupportsExtention() const override { return m_pVideoCodec && m_pVideoCodec->SupportsExtention(); }
++  bool SupportsExtention() const override { return m_supportsExtention.load(); }
+ 
+   int  GetDataLevel() const { return m_messageQueue.GetLevel(true); }
+   void SetMaxDataSize(int iMaxDataSize) { m_messageQueue.SetMaxDataSize(iMaxDataSize); }
+@@ -136,6 +136,7 @@ protected:
+   bool m_paused;
+   IDVDStreamPlayer::ESyncState m_syncState;
+   std::atomic_bool m_bAbortOutput;
++  std::atomic_bool m_supportsExtention{false};
+ 
+   BitstreamStats m_videoStats;
+ 
+diff --git a/xbmc/cores/VideoPlayer/VideoRenderers/RenderManager.cpp b/xbmc/cores/VideoPlayer/VideoRenderers/RenderManager.cpp
+index cac1dfa306..8cfb302712 100644
+--- a/xbmc/cores/VideoPlayer/VideoRenderers/RenderManager.cpp
++++ b/xbmc/cores/VideoPlayer/VideoRenderers/RenderManager.cpp
+@@ -14,6 +14,7 @@
+ #include "RenderFlags.h"
+ #include "ServiceBroker.h"
+ #include "application/Application.h"
++#include "cores/DataCacheCore.h"
+ #include "cores/VideoPlayer/Interface/TimingConstants.h"
+ #include "guilib/GUIComponent.h"
+ #include "guilib/StereoscopicsManager.h"
+@@ -32,8 +33,10 @@
+ #include "windowing/GraphicContext.h"
+ #include "windowing/WinSystem.h"
+ 
++#include <cmath>
+ #include <memory>
+ #include <mutex>
++#include <vector>
+ 
+ using namespace std::chrono_literals;
+ 
+@@ -607,6 +610,87 @@ RESOLUTION CRenderManager::GetResolution()
+ {
+   RESOLUTION res = CServiceBroker::GetWinSystem()->GetGfxContext().GetVideoResolution();
+ 
++  auto& cache = CServiceBroker::GetDataCacheCore();
++  if (cache.IsBluray3DNav())
++  {
++    if (!cache.IsBluray3DReady())
++      return res;
++
++    const RESOLUTION locked = cache.GetBluray3DResolution();
++    if (locked != RES_INVALID)
++      return locked;
++
++    auto& graphics = CServiceBroker::GetWinSystem()->GetGfxContext();
++    uint32_t requiredFlags = 0;
++    switch (graphics.GetStereoMode())
++    {
++      case RenderStereoMode::HARDWAREBASED:
++        requiredFlags = D3DPRESENTFLAG_MODE3DFP;
++        break;
++      case RenderStereoMode::SPLIT_VERTICAL:
++        requiredFlags = D3DPRESENTFLAG_MODE3DSBS;
++        break;
++      case RenderStereoMode::SPLIT_HORIZONTAL:
++        requiredFlags = D3DPRESENTFLAG_MODE3DTB;
++        break;
++      default:
++        break;
++    }
++
++    constexpr uint32_t stereoFlags = D3DPRESENTFLAG_MODE3DFP |
++                                     D3DPRESENTFLAG_MODE3DSBS |
++                                     D3DPRESENTFLAG_MODE3DTB;
++    const auto supportsOutput = [requiredFlags, stereoFlags](uint32_t flags)
++    {
++      return requiredFlags != 0 ? (flags & requiredFlags) == requiredFlags
++                                : (flags & stereoFlags) == 0;
++    };
++    const float frameRates[] = {24000.0f / 1001.0f, 24.0f, 50.0f, 60.0f};
++    for (const float fps : frameRates)
++    {
++      const RESOLUTION candidate =
++          CResolutionUtils::ChooseBestResolution(fps, 1920, 1080, requiredFlags != 0);
++      if (supportsOutput(graphics.GetResInfo(candidate).dwFlags))
++      {
++        cache.SetBluray3DResolution(candidate);
++        CLog::Log(LOGINFO, "Blu-ray 3D navigation: holding output {}",
++                  graphics.GetResInfo(candidate).strMode);
++        return candidate;
++      }
++    }
++
++    std::vector<RESOLUTION> candidates;
++    graphics.GetAllowedResolutions(candidates);
++    for (const int height : {1080, 720})
++    {
++      for (const float fps : frameRates)
++      {
++        for (const RESOLUTION candidate : candidates)
++        {
++          if (candidate < RES_DESKTOP)
++            continue;
++          const RESOLUTION_INFO info = graphics.GetResInfo(candidate);
++          if (!supportsOutput(info.dwFlags) ||
++              (info.dwFlags & D3DPRESENTFLAG_INTERLACED) != 0 ||
++              info.iScreenHeight != height || info.iScreenWidth != height * 16 / 9 ||
++              std::abs(info.fRefreshRate - fps) > 0.01f)
++            continue;
++
++          cache.SetBluray3DResolution(candidate);
++          CLog::Log(LOGINFO,
++                    "Blu-ray 3D navigation: direct output {}, id={}, flags=0x{:x}",
++                    info.strMode, info.strId, info.dwFlags);
++          return candidate;
++        }
++      }
++    }
++
++    CLog::Log(LOGWARNING, "Blu-ray 3D navigation: no compatible output mode; using 2D");
++    CServiceBroker::GetGUI()->GetStereoscopicsManager().SetStereoMode(RenderStereoMode::OFF);
++    cache.SetBluray3DResolution(RES_DESKTOP);
++    return RES_DESKTOP;
++  }
++
+   std::unique_lock lock(m_statelock);
+   if (m_renderState == STATE_UNCONFIGURED)
+     return res;
+@@ -821,6 +905,24 @@ void CRenderManager::UpdateResolution()
+ {
+   if (m_bTriggerUpdateResolution)
+   {
++    auto& cache = CServiceBroker::GetDataCacheCore();
++    if (cache.IsBluray3DNav())
++    {
++      auto& graphics = CServiceBroker::GetWinSystem()->GetGfxContext();
++      if (!cache.IsBluray3DReady() || !graphics.IsFullScreenVideo() ||
++          !graphics.IsFullScreenRoot())
++        return;
++
++      graphics.SetHDRType(m_picture.hdrType);
++      graphics.SetVideoResolution(GetResolution(), false);
++      UpdateLatencyTweak();
++      if (m_pRenderer)
++        m_pRenderer->Update();
++      m_bTriggerUpdateResolution = false;
++      m_playerPort->VideoParamsChange();
++      return;
++    }
++
+     if (CServiceBroker::GetWinSystem()->GetGfxContext().IsFullScreenVideo() && CServiceBroker::GetWinSystem()->GetGfxContext().IsFullScreenRoot())
+     {
+       auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::system_clock::now() - m_videostarted);
+diff --git a/xbmc/guilib/StereoscopicsManager.cpp b/xbmc/guilib/StereoscopicsManager.cpp
+index 400b9b8eaa..d500c40ab3 100644
+--- a/xbmc/guilib/StereoscopicsManager.cpp
++++ b/xbmc/guilib/StereoscopicsManager.cpp
+@@ -255,7 +255,8 @@ RenderStereoMode CStereoscopicsManager::GetStereoModeByUserChoice() const
+ RenderStereoMode CStereoscopicsManager::GetStereoModeOfPlayingVideo(void) const
+ {
+   RenderStereoMode mode = RenderStereoMode::OFF;
+-  std::string playerMode = GetVideoStereoMode();
++  const std::string playerMode =
++      CServiceBroker::GetDataCacheCore().IsBluray3DNav() ? "block_lr" : GetVideoStereoMode();
+ 
+   if (!playerMode.empty())
+   {
+@@ -399,6 +400,12 @@ void CStereoscopicsManager::OnSettingChanged(const std::shared_ptr<const CSettin
+     CLog::Log(LOGDEBUG, "StereoscopicsManager: stereo mode setting changed to {}",
+               ConvertGuiStereoModeToString(mode));
+     ApplyStereoMode(mode);
++    auto& cache = CServiceBroker::GetDataCacheCore();
++    if (cache.IsBluray3DNav())
++    {
++      cache.SetBluray3DResolution(RES_INVALID);
++      Notify();
++    }
+   }
+ }
+ 
+@@ -561,6 +568,26 @@ bool CStereoscopicsManager::IsVideoStereoscopic() const
+ 
+ void CStereoscopicsManager::OnStreamChange()
+ {
++  auto& cache = CServiceBroker::GetDataCacheCore();
++  if (cache.IsBluray3DNav())
++  {
++    if (!cache.IsBluray3DReady())
++    {
++      RenderStereoMode preferred = GetPreferredPlaybackMode();
++      if (preferred == RenderStereoMode::AUTO)
++        preferred = GetStereoModeOfPlayingVideo();
++      auto* windowSystem =
++          static_cast<CWinSystemAmlogic*>(CServiceBroker::GetWinSystem());
++      if (!windowSystem->GetAmlDisplay()->aml_display_support_3d() ||
++          !CServiceBroker::GetRenderSystem()->SupportsStereo(preferred))
++        preferred = RenderStereoMode::OFF;
++      SetStereoMode(preferred);
++      cache.SetBluray3DReady();
++      Notify();
++    }
++    return;
++  }
++
+   STEREOSCOPIC_PLAYBACK_MODE playbackMode = static_cast<STEREOSCOPIC_PLAYBACK_MODE>(m_settings->GetInt(CSettings::SETTING_VIDEOPLAYER_STEREOSCOPICPLAYBACKMODE));
+   RenderStereoMode mode = GetStereoMode();
+ 
+diff --git a/xbmc/windowing/Resolution.cpp b/xbmc/windowing/Resolution.cpp
+index 96a5e0e7a9..167ea8aee7 100644
+--- a/xbmc/windowing/Resolution.cpp
++++ b/xbmc/windowing/Resolution.cpp
+@@ -126,7 +126,8 @@ void CResolutionUtils::FindResolutionFromWhitelist(float fps, int width, int hei
+     for (const auto& c : candidates)
+     {
+       info = CServiceBroker::GetWinSystem()->GetGfxContext().GetResInfo(c);
+-      if (((info.iScreenWidth >= desktop_info.iScreenWidth) ||
++      if (((is3D && (dwFlags & STEREO_FLAGS) != 0) ||
++           (info.iScreenWidth >= desktop_info.iScreenWidth) ||
+            (info.iScreenHeight >= curr.iScreenHeight && info.iScreenWidth >= curr.iScreenWidth)) &&
+           ModeFlagsMatch(info.dwFlags, dwFlags))
+       {
+diff --git a/xbmc/windowing/amlogic/WinSystemAmlogicGLESContext.cpp b/xbmc/windowing/amlogic/WinSystemAmlogicGLESContext.cpp
+index a51c8e579f..95535ec30c 100644
+--- a/xbmc/windowing/amlogic/WinSystemAmlogicGLESContext.cpp
++++ b/xbmc/windowing/amlogic/WinSystemAmlogicGLESContext.cpp
+@@ -149,6 +149,22 @@ bool CWinSystemAmlogicGLESContext::CreateNewWindow(const std::string& name,
+     __FUNCTION__,
+     res.iWidth, res.iHeight, res.iScreenWidth, res.iScreenHeight, res.fRefreshRate, res.dwFlags, nativeGUI);
+ 
++  if (m_bWindowCreated && IsPresentationReady() &&
++      !force_mode_switch_by_hotplug && !IsHotplugPending() &&
++      m_stereo_mode == RenderStereoMode::HARDWAREBASED &&
++      (m_lastAppliedResolution.dwFlags & D3DPRESENTFLAG_MODE3DFP) != 0 &&
++      current_resolution.iScreenWidth == m_lastAppliedResolution.iScreenWidth &&
++      current_resolution.iScreenHeight == m_lastAppliedResolution.iScreenHeight &&
++      (current_resolution.dwFlags & D3DPRESENTFLAG_INTERLACED) ==
++          (m_lastAppliedResolution.dwFlags & D3DPRESENTFLAG_INTERLACED) &&
++      MathUtils::FloatEquals(current_resolution.fRefreshRate,
++                            m_lastAppliedResolution.fRefreshRate, 0.001f))
++  {
++    current_resolution.iWidth = m_lastAppliedResolution.iWidth;
++    current_resolution.iHeight = m_lastAppliedResolution.iHeight;
++    current_resolution.dwFlags = m_lastAppliedResolution.dwFlags;
++  }
++
+   // check if mode switch is needed
+   if (current_resolution.iWidth == res.iWidth && current_resolution.iHeight == res.iHeight &&
+       current_resolution.iScreenWidth == res.iScreenWidth &&
+@@ -236,6 +252,7 @@ bool CWinSystemAmlogicGLESContext::CreateNewWindow(const std::string& name,
+       (*i)->OnResetDisplay();
+   }
+ 
++  m_lastAppliedResolution = res;
+   if (m_amlDisplay->aml_get_display_connected())
+     SetPresentationReady(true);
+ 
+diff --git a/xbmc/windowing/amlogic/WinSystemAmlogicGLESContext.h b/xbmc/windowing/amlogic/WinSystemAmlogicGLESContext.h
+index 746148c824..92b1cd979c 100644
+--- a/xbmc/windowing/amlogic/WinSystemAmlogicGLESContext.h
++++ b/xbmc/windowing/amlogic/WinSystemAmlogicGLESContext.h
+@@ -13,6 +13,7 @@
+ #include "utils/GlobalsHandling.h"
+ #include "utils/StreamDetails.h"
+ #include "WinSystemAmlogic.h"
++#include "windowing/Resolution.h"
+ 
+ namespace KODI
+ {
+@@ -59,6 +60,7 @@ protected:
+ private:
+   std::unique_ptr<CEGLContextUtils> m_pGLContext;
+   StreamHdrType m_hdrType = StreamHdrType::HDR_TYPE_NONE;
++  RESOLUTION_INFO m_lastAppliedResolution;
+ 
+   bool m_guiCompositing{false};
+   CFrameBufferObject m_guiFbo;

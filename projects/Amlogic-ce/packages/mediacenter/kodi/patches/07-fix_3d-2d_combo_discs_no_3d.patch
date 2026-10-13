@@ -1,0 +1,145 @@
+--- a/xbmc/filesystem/BlurayDirectory.cpp
++++ b/xbmc/filesystem/BlurayDirectory.cpp
+@@ -232,7 +232,7 @@ void RemoveDuplicatePlaylists(std::vector<PlaylistInformation>& playlists)
+                            return a.playlist > b.playlist;
+                          }};
+ 
+-  std::unordered_set<unsigned int> duplicatePlaylists;
++  std::map<unsigned int, unsigned int> duplicatePlaylists;
+   for (size_t i = 0; i + 1 < playlists.size(); ++i)
+   {
+     for (size_t j = i + 1; j < playlists.size(); ++j)
+@@ -243,13 +243,27 @@ void RemoveDuplicatePlaylists(std::vector<PlaylistInformation>& playlists)
+           playlists[i].chapters == playlists[j].chapters &&
+           playlists[i].clips == playlists[j].clips)
+       {
+-        duplicatePlaylists.emplace(isDiscarded(playlists[i], playlists[j]) ? playlists[i].playlist
+-                                                                           : playlists[j].playlist);
++        if (AreDifferentStereoscopicPresentations(playlists[i], playlists[j]))
++          continue;
++
++        const bool discardI{isDiscarded(playlists[i], playlists[j])};
++        const PlaylistInformation& discarded{discardI ? playlists[i] : playlists[j]};
++        const PlaylistInformation& kept{discardI ? playlists[j] : playlists[i]};
++        duplicatePlaylists.try_emplace(discarded.playlist, kept.playlist);
+       }
+     }
+   }
+-  std::erase_if(playlists, [&duplicatePlaylists](const PlaylistInformation& p)
+-                { return duplicatePlaylists.contains(p.playlist); });
++  std::erase_if(playlists,
++                [&duplicatePlaylists](const PlaylistInformation& p)
++                {
++                  const auto it{duplicatePlaylists.find(p.playlist)};
++                  if (it == duplicatePlaylists.end())
++                    return false;
++
++                  CLog::LogF(LOGDEBUG, "Discarding playlist {} - duplicate of playlist {}",
++                             p.playlist, it->second);
++                  return true;
++                });
+ }
+ 
+ bool SetStreamDetails(const CURL& url,
+diff --git a/xbmc/filesystem/DiscDirectoryHelper.cpp b/xbmc/filesystem/DiscDirectoryHelper.cpp
+index 67993636407b2..6953221a82289 100644
+--- a/xbmc/filesystem/DiscDirectoryHelper.cpp
++++ b/xbmc/filesystem/DiscDirectoryHelper.cpp
+@@ -2548,6 +2548,8 @@ bool IsSamePresentation(const PlaylistInformation& a,
+ {
+   if (a.duration != b.duration)
+     return false;
++  if (AreDifferentStereoscopicPresentations(a, b))
++    return false;
+   if (a.clips == b.clips)
+     return true;
+   if (aClipDurations.size() < 2 || a.chapters.size() != b.chapters.size() ||
+diff --git a/xbmc/filesystem/DiscDirectoryHelper.h b/xbmc/filesystem/DiscDirectoryHelper.h
+index 5160043dea91a..298b3bfb7da08 100644
+--- a/xbmc/filesystem/DiscDirectoryHelper.h
++++ b/xbmc/filesystem/DiscDirectoryHelper.h
+@@ -124,6 +124,10 @@ struct PlaylistInformation
+   std::vector<SubtitleStreamInfo> pgStreams;
+   std::string languages;
+ 
++  std::vector<unsigned int> dependentViewClips;
++
++  bool baseViewIsRightEye{false};
++
+   //! Whether the playlist carries a secondary video stream, ie. it presents the content
+   //! picture-in-picture (see IsPictureInPicturePresentation)
+   bool hasSecondaryVideo{false};
+@@ -144,9 +148,20 @@ struct PlaylistInformation
+     languages.clear();
+     hasSecondaryVideo = false;
+     hasDolbyVision = false;
++    dependentViewClips.clear();
++    baseViewIsRightEye = false;
+   }
+ };
+ 
++inline bool AreDifferentStereoscopicPresentations(const PlaylistInformation& a,
++                                                  const PlaylistInformation& b)
++{
++  if (a.dependentViewClips != b.dependentViewClips)
++    return true;
++
++  return !a.dependentViewClips.empty() && a.baseViewIsRightEye != b.baseViewIsRightEye;
++}
++
+ struct ClipInfo
+ {
+   std::chrono::milliseconds duration{0ms};
+diff --git a/xbmc/filesystem/bluray/MPLSParser.cpp b/xbmc/filesystem/bluray/MPLSParser.cpp
+index 0d9674e1c4642..5088f9a0fcca7 100644
+--- a/xbmc/filesystem/bluray/MPLSParser.cpp
++++ b/xbmc/filesystem/bluray/MPLSParser.cpp
+@@ -701,6 +701,8 @@ constexpr unsigned int OFFSET_MPLS_PLAYLIST_MARK_POSITION = 12;
+ constexpr unsigned int OFFSET_MPLS_EXTENSION_DATA_POSITION = 16;
+ constexpr unsigned int OFFSET_MPLS_APP_INFO_PLAYLIST = 40;
+ constexpr unsigned int OFFSET_MPLS_APP_INFO_PLAYBACK_TYPE = 5;
++constexpr unsigned int OFFSET_MPLS_APP_INFO_FLAGS = 16;
++constexpr uint8_t MPLS_APP_INFO_MVC_BASE_VIEW_R = 0x10;
+ constexpr unsigned int OFFSET_MPLS_NUM_PLAYITEMS = 6;
+ constexpr unsigned int OFFSET_MPLS_NUM_SUBPATHS = 8;
+ constexpr unsigned int OFFSET_MPLS_SUBPATH_NUM_SUBPLAYITEMS = 9;
+@@ -1104,6 +1106,8 @@ bool ParseMPLS(const CURL& url,
+     playbackCount = GetWord(buffer, offset + 6);
+   playlistInformation.playbackType = playbackType;
+   playlistInformation.playbackCount = playbackCount;
++  playlistInformation.baseViewIsRightEye =
++      (GetByte(buffer, offset + OFFSET_MPLS_APP_INFO_FLAGS) & MPLS_APP_INFO_MVC_BASE_VIEW_R) != 0;
+ 
+   // Parse Playlist
+   offset = playlistPosition;
+diff --git a/xbmc/filesystem/bluray/PlaylistStructure.h b/xbmc/filesystem/bluray/PlaylistStructure.h
+index 1438718fcdd62..000e7338605ce 100644
+--- a/xbmc/filesystem/bluray/PlaylistStructure.h
++++ b/xbmc/filesystem/bluray/PlaylistStructure.h
+@@ -37,6 +37,8 @@ struct BlurayPlaylistInformation
+   std::vector<PlaylistMarkInformation> playlistMarks;
+   std::vector<ChapterInformation> chapters;
+ 
++  bool baseViewIsRightEye{false};
++
+   //! Whether the clips carry the stream information from their .clpi (see CMPLSParser::ReadMPLS)
+   bool clipStreamsRead{false};
+ };
+diff --git a/xbmc/filesystem/bluray/StreamParser.cpp b/xbmc/filesystem/bluray/StreamParser.cpp
+index 53c31a634b1a7..2a01a807e979e 100644
+--- a/xbmc/filesystem/bluray/StreamParser.cpp
++++ b/xbmc/filesystem/bluray/StreamParser.cpp
+@@ -413,6 +413,13 @@ void CStreamParser::ConvertBlurayPlaylistInformation(const BlurayPlaylistInforma
+     p.clips.emplace_back(clip.clip);
+     p.clipDuration[clip.clip] = clip.duration;
+   }
++  p.dependentViewClips.reserve(b.extensionSubPlayItems.size());
++  for (const SubPlayItemInformation& subPlayItem : b.extensionSubPlayItems)
++  {
++    if (!subPlayItem.clips.empty())
++      p.dependentViewClips.emplace_back(subPlayItem.clips.front().clip);
++  }
++  p.baseViewIsRightEye = b.baseViewIsRightEye;
+ 
+   const DefaultStreams defaults{GetDefaultStreams(b)};
+   const AspectRatioMap aspectRatios{GetClipAspectRatios(b)};

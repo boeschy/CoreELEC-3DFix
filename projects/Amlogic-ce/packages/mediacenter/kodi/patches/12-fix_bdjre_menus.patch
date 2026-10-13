@@ -1,0 +1,99 @@
+--- a/xbmc/cores/VideoPlayer/DVDInputStreams/DVDInputStreamBluray.cpp
++++ b/xbmc/cores/VideoPlayer/DVDInputStreams/DVDInputStreamBluray.cpp
+@@ -798,4 +798,4 @@ void CDVDInputStreamBluray::ProcessEvent() {
+     && m_nMVCClip != m_clip
+     && (m_clipQueue.empty()
+-      || m_clip != m_titleInfo->clips + m_clipQueue.front()))
++      || m_clip != m_titleInfo->clips + m_clipQueue.back()))
+   {
+--- a/xbmc/cores/VideoPlayer/DVDInputStreams/DVDInputStreamBluray.cpp
++++ b/xbmc/cores/VideoPlayer/DVDInputStreams/DVDInputStreamBluray.cpp
+@@ -839,2 +839,7 @@ int CDVDInputStreamBluray::Read(uint8_t* buf, int buf_size)
+       switch(m_event.event) {
++        case BD_EVENT_IDLE:
++          if (result == 0)
++            return 0;
++          break;
++
+         case BD_EVENT_SEEK:
+@@ -1403,3 +1408,9 @@ CDVDInputStream::ENextStream CDVDInputStreamBluray::NextStream()
+     return NEXTSTREAM_NONE;
+ 
++  if (m_event.event == BD_EVENT_IDLE)
++  {
++    ProcessEvent();
++    return NEXTSTREAM_RETRY;
++  }
++
+   /* process any current event */
+@@ -1553,7 +1553,11 @@ bool CDVDInputStreamBluray::ProcessItem(int playitem)
+ {
++  m_bMVCPlayback = false;
++  m_bFlipEyes = false;
++  m_nMVCSubPathIndex = 0;
++  EMPTY_QUEUE(m_clipQueue);
+   FreeTitleInfo();
+ 
+   m_titleInfo = bd_get_playlist_info(m_bd, playitem, m_angle);
+ 
+-  if (!m_bMVCDisabled)
++  if (!m_bMVCDisabled && m_titleInfo)
+   {
+@@ -1638,3 +1642,9 @@ bool CDVDInputStreamBluray::OpenMVCDemux(int playItem)
+   MPLS_PL *pl = bd_get_title_mpls(m_bd);
+-  if (!pl)
++  if (!m_bMVCPlayback || !m_titleInfo || playItem < 0 ||
++      static_cast<uint32_t>(playItem) >= m_titleInfo->clip_count || !pl ||
++      m_nMVCSubPathIndex < 0 || m_nMVCSubPathIndex >= pl->ext_sub_count ||
++      !pl->ext_sub_path ||
++      playItem >= pl->ext_sub_path[m_nMVCSubPathIndex].sub_playitem_count ||
++      !pl->ext_sub_path[m_nMVCSubPathIndex].sub_play_item ||
++      !pl->ext_sub_path[m_nMVCSubPathIndex].sub_play_item[playItem].clip)
+     return false;
+--- a/xbmc/cores/VideoPlayer/DVDInputStreams/DVDInputStreamBluray.h
++++ b/xbmc/cores/VideoPlayer/DVDInputStreams/DVDInputStreamBluray.h
+@@ -195,3 +195,3 @@
+   CDVDDemux* GetExtentionDemux() override { return m_pMVCDemux; };
+-  bool HasExtention() override { return m_bMVCPlayback; }
++  bool HasExtention() override { return m_bMVCPlayback && m_pMVCDemux != nullptr; }
+   bool AreEyesFlipped() override { return m_bFlipEyes; }
+--- a/xbmc/cores/VideoPlayer/DVDDemuxers/DemuxMVC.cpp
++++ b/xbmc/cores/VideoPlayer/DVDDemuxers/DemuxMVC.cpp
+@@ -35,4 +35,6 @@ static int mvc_file_read(void *h, uint8_t* buf, int size)
+   CDVDInputStream* pInputStream = static_cast<CDemuxMVC*>(h)->m_pInput;
+   int s = pInputStream->Read(buf, size);
++  if (s > 0)
++    return s;
+ 
+   if (pInputStream->IsEOF()) {
+@@ -173,3 +175,3 @@ DemuxPacket* CDemuxMVC::Read()
+       continue;
+-    else if (ret == AVERROR_EOF)
++    else if (ret < 0)
+       break;
+--- a/xbmc/cores/VideoPlayer/VideoPlayer.cpp
++++ b/xbmc/cores/VideoPlayer/VideoPlayer.cpp
+@@ -965 +965 @@ bool CVideoPlayer::OpenDemuxStream()
+-  while (!m_bStop && attempts-- > 0)
++  while (!m_bStop && !m_bAbortRequest && attempts-- > 0)
+@@ -972,6 +972,17 @@ bool CVideoPlayer::OpenDemuxStream()
+-    else if(!m_pDemuxer && m_pInputStream->NextStream() != CDVDInputStream::NEXTSTREAM_NONE)
++    else if (!m_pDemuxer)
+     {
+-      CLog::Log(LOGDEBUG, "{} - New stream available from input, retry open", __FUNCTION__);
+-      continue;
++      const auto next = m_pInputStream->NextStream();
++      if (next == CDVDInputStream::NEXTSTREAM_RETRY)
++      {
++        ++attempts;
++        HandleMessages();
++        CThread::Sleep(100ms);
++        continue;
++      }
++      if (next == CDVDInputStream::NEXTSTREAM_OPEN)
++      {
++        CLog::Log(LOGDEBUG, "{} - New stream available from input, retry open", __FUNCTION__);
++        continue;
++      }
+     }
+     break;

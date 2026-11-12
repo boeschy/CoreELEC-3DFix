@@ -176,15 +176,6 @@ index 2d5c700dd4..0cc6eeb81e 100644
  
  import javax.media.Clock;
  import javax.media.ClockStoppedException;
-@@ -195,7 +196,7 @@ public abstract class BDHandler implements Player, ServiceContentHandler {
- 
-     public Time getMediaTime() {
-         synchronized (this) {
--            if (state == Started)
-+            if ((state == Started) && !startPending && !seekPending)
-                 return new Time((baseMediaTime + (getTimeBase().getNanoseconds() - baseTime)) / 1000000000.0d);
-             else
-                 return new Time(baseMediaTime / 1000000000.0d);
 @@ -204,7 +205,7 @@ public abstract class BDHandler implements Player, ServiceContentHandler {
  
      public long getMediaNanoseconds() {

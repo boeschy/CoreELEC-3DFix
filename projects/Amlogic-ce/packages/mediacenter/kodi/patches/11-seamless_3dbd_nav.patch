@@ -65,15 +65,15 @@ diff --git a/xbmc/cores/VideoPlayer/DVDInputStreams/DVDInputStreamBluray.cpp b/x
 index 9d9a67143c..c5c947fa17 100644
 --- a/xbmc/cores/VideoPlayer/DVDInputStreams/DVDInputStreamBluray.cpp
 +++ b/xbmc/cores/VideoPlayer/DVDInputStreams/DVDInputStreamBluray.cpp
-@@ -16,6 +16,7 @@
- #include "LangInfo.h"
+@@ -16,6 +15,7 @@
+ #include "IVideoPlayer.h"
  #include "ServiceBroker.h"
  #include "URL.h"
 +#include "cores/DataCacheCore.h"
  #include "filesystem/BlurayCallback.h"
  #include "filesystem/SpecialProtocol.h"
- #include "settings/Settings.h"
-@@ -419,12 +420,15 @@ bool CDVDInputStreamBluray::Open()
+ #include "language/LangInfo.h"
+@@ -419,6 +420,8 @@ bool CDVDInputStreamBluray::Open()
  
    OpenNextStream();
  
@@ -82,6 +82,7 @@ index 9d9a67143c..c5c947fa17 100644
    return true;
  }
  
+@@ -431,6 +434,7 @@ void CDVDInputStreamBluray::NotifyPlayer(void* data, int event)
  // close file and reset everything
  void CDVDInputStreamBluray::Close()
  {

@@ -1,8 +1,8 @@
 diff --git a/addons/resource.language.en_gb/resources/strings.po b/addons/resource.language.en_gb/resources/strings.po
-index 9c286d0c12..283e2f05e9 100644
+index b85c838ad6..6425a377ec 100644
 --- a/addons/resource.language.en_gb/resources/strings.po
 +++ b/addons/resource.language.en_gb/resources/strings.po
-@@ -25450,7 +25450,49 @@ msgctxt "#39219"
+@@ -25576,7 +25576,49 @@ msgctxt "#39219"
  msgid "Use the system Dolby Vision extensions to correctly display Dolby Vision profile 5, 7 (excludes FEL reconstruction), 8 and 10 video."
  msgstr ""
  
@@ -54,10 +54,10 @@ index 9c286d0c12..283e2f05e9 100644
  #. List formatting: pattern used to join a list of exactly two items, e.g. "A and B"
  #. STR_LIST_AND_TWO
 diff --git a/system/settings/settings.xml b/system/settings/settings.xml
-index e056e9e7f7..054de23a5b 100755
+index 735bf49dce..a72577b5d7 100755
 --- a/system/settings/settings.xml
 +++ b/system/settings/settings.xml
-@@ -938,6 +938,16 @@
+@@ -951,6 +951,16 @@
            </constraints>
            <control type="spinner" format="integer" delayed="true"/>
          </setting>
@@ -74,7 +74,7 @@ index e056e9e7f7..054de23a5b 100755
          <setting id="subtitles.charset" type="string" label="735" help="36189">
            <level>1</level>
            <default>DEFAULT</default>
-@@ -947,6 +957,28 @@
+@@ -960,6 +970,28 @@
            <control type="list" format="string" />
          </setting>
        </group>
@@ -104,35 +104,27 @@ index e056e9e7f7..054de23a5b 100755
          <setting id="subtitles.parsecaptions" type="boolean" label="24130" help="24131">
            <level>1</level>
 diff --git a/xbmc/cores/VideoPlayer/DVDCodecs/Overlay/DVDOverlay.h b/xbmc/cores/VideoPlayer/DVDCodecs/Overlay/DVDOverlay.h
-index 0e1d094dde..f4fb3101a7 100644
+index 5acb0d5502..5cf236b5fb 100644
 --- a/xbmc/cores/VideoPlayer/DVDCodecs/Overlay/DVDOverlay.h
 +++ b/xbmc/cores/VideoPlayer/DVDCodecs/Overlay/DVDOverlay.h
-@@ -46,6 +46,8 @@ public:
+@@ -42,11 +42,14 @@ public:
+     replace = false;
+     m_textureid = 0;
+     m_3dSubtitleDepth = 0;
++    m_3dSubtitleDepthAuthored = false;
+     m_enableTextAlign = false;
      m_overlayContainerFlushable = true;
      m_setForcedMargins = false;
+     m_discMenu = false;
      m_stereoView = DVDOverlayStereoView::BOTH;
 +    m_isBitmapSubtitle = false;
 +    m_isPgsSubtitle = false;
    }
  
    CDVDOverlay(const CDVDOverlay& src) : std::enable_shared_from_this<CDVDOverlay>(src)
-@@ -57,10 +59,13 @@ public:
-     replace = src.replace;
-     m_textureid = 0;
-     m_3dSubtitleDepth = 0;
-+    m_3dSubtitleDepthAuthored = false;
-     m_enableTextAlign = src.m_enableTextAlign;
-     m_overlayContainerFlushable = src.m_overlayContainerFlushable;
-     m_setForcedMargins = src.m_setForcedMargins;
-     m_stereoView = src.m_stereoView;
-+    m_isBitmapSubtitle = src.m_isBitmapSubtitle;
-+    m_isPgsSubtitle = src.m_isPgsSubtitle;
-   }
- 
-   virtual ~CDVDOverlay() = default;
-@@ -115,6 +120,24 @@ public:
+@@ -127,6 +130,24 @@ public:
     */
-   bool IsForcedMargins() const { return m_setForcedMargins; }
+   bool IsDiscMenu() const { return m_discMenu; }
  
 +  /*
 +   * \brief Mark the overlay as a bitmap subtitle, i.e. a picture of text
@@ -155,7 +147,7 @@ index 0e1d094dde..f4fb3101a7 100644
    double iPTSStartTime;
    double iPTSStopTime;
    bool bForced; // display, no matter what
-@@ -123,11 +146,14 @@ public:
+@@ -135,12 +156,15 @@ public:
    DVDOverlayStereoView m_stereoView;
  
    int m_3dSubtitleDepth;
@@ -165,6 +157,7 @@ index 0e1d094dde..f4fb3101a7 100644
    bool m_enableTextAlign;
    bool m_overlayContainerFlushable;
    bool m_setForcedMargins;
+   bool m_discMenu;
 +  bool m_isBitmapSubtitle;
 +  bool m_isPgsSubtitle;
  };
@@ -341,10 +334,10 @@ index 63c0d84a59..712ddb58df 100644
  // HDR10+ T.35, the mastering display colour volume and the content light
  // level, each latched verbatim after unescaping.
 diff --git a/xbmc/cores/VideoPlayer/DVDCodecs/Video/DVDVideoCodec.cpp b/xbmc/cores/VideoPlayer/DVDCodecs/Video/DVDVideoCodec.cpp
-index 4cd55fe5a5..3d3c1e46e6 100644
+index 9acb52d893..15132c22eb 100644
 --- a/xbmc/cores/VideoPlayer/DVDCodecs/Video/DVDVideoCodec.cpp
 +++ b/xbmc/cores/VideoPlayer/DVDCodecs/Video/DVDVideoCodec.cpp
-@@ -44,6 +44,7 @@ void VideoPicture::Reset()
+@@ -49,6 +49,7 @@ void VideoPicture::Reset()
    stereoMode.clear();
  
    m_3dSubtitleDepth = 0;
@@ -353,10 +346,10 @@ index 4cd55fe5a5..3d3c1e46e6 100644
    qp_table = nullptr;
    qstride = 0;
 diff --git a/xbmc/cores/VideoPlayer/DVDCodecs/Video/DVDVideoCodec.h b/xbmc/cores/VideoPlayer/DVDCodecs/Video/DVDVideoCodec.h
-index 9635b7b65c..6ac506ff53 100644
+index 491c167cba..56994e772a 100644
 --- a/xbmc/cores/VideoPlayer/DVDCodecs/Video/DVDVideoCodec.h
 +++ b/xbmc/cores/VideoPlayer/DVDCodecs/Video/DVDVideoCodec.h
-@@ -70,6 +70,7 @@ public:
+@@ -76,6 +76,7 @@ public:
    std::string stereoMode;
  
    int m_3dSubtitleDepth;
@@ -428,10 +421,10 @@ index 24dd530d2d..fcca5c6da5 100644
    bool m_dualLayer{false};
    int m_nalLengthSize{0};
 diff --git a/xbmc/cores/VideoPlayer/VideoPlayerVideo.cpp b/xbmc/cores/VideoPlayer/VideoPlayerVideo.cpp
-index 11a86f57b6..01dd57d3f3 100644
+index a740f731a7..17620237ce 100644
 --- a/xbmc/cores/VideoPlayer/VideoPlayerVideo.cpp
 +++ b/xbmc/cores/VideoPlayer/VideoPlayerVideo.cpp
-@@ -936,11 +936,20 @@ void CVideoPlayerVideo::ProcessOverlays(const VideoPicture* pSource, double pts)
+@@ -1021,11 +1021,20 @@ void CVideoPlayerVideo::ProcessOverlays(const VideoPicture* pSource, double pts)
        {
  
          pOverlay->m_3dSubtitleDepth = pSource->m_3dSubtitleDepth;
@@ -473,7 +466,7 @@ index d7f3879d10..8eacf26294 100644
    ReleaseUnused();
  }
 diff --git a/xbmc/cores/VideoPlayer/VideoRenderers/OverlayRenderer.cpp b/xbmc/cores/VideoPlayer/VideoRenderers/OverlayRenderer.cpp
-index ce72ffbc8b..e3d0abe20e 100644
+index 49d9832062..d6763342e0 100644
 --- a/xbmc/cores/VideoPlayer/VideoRenderers/OverlayRenderer.cpp
 +++ b/xbmc/cores/VideoPlayer/VideoRenderers/OverlayRenderer.cpp
 @@ -27,6 +27,7 @@
@@ -1025,7 +1018,7 @@ index cbf436ce31..86c87f59a1 100644
      std::shared_ptr<struct KODI::SUBTITLES::STYLE::style> m_overlayStyle;
      std::atomic<bool> m_isSettingsChanged{false};
 diff --git a/xbmc/cores/VideoPlayer/VideoRenderers/OverlayRendererUtil.cpp b/xbmc/cores/VideoPlayer/VideoRenderers/OverlayRendererUtil.cpp
-index 7029a99bd1..245f940c19 100644
+index e23ec48296..c1d90adef0 100644
 --- a/xbmc/cores/VideoPlayer/VideoRenderers/OverlayRendererUtil.cpp
 +++ b/xbmc/cores/VideoPlayer/VideoRenderers/OverlayRendererUtil.cpp
 @@ -22,6 +22,9 @@
@@ -1121,10 +1114,10 @@ index 242f63cae0..1a5036a2c4 100644
      {"verticalshiftup", ACTION_VSHIFT_UP},
      {"verticalshiftdown", ACTION_VSHIFT_DOWN},
 diff --git a/xbmc/interfaces/builtins/PlayerBuiltins.cpp b/xbmc/interfaces/builtins/PlayerBuiltins.cpp
-index e4e9906824..fef95910e7 100644
+index dc6b859e64..cd303343d4 100644
 --- a/xbmc/interfaces/builtins/PlayerBuiltins.cpp
 +++ b/xbmc/interfaces/builtins/PlayerBuiltins.cpp
-@@ -762,6 +762,24 @@ static int SubtitleShiftUp(const std::vector<std::string>& params)
+@@ -774,6 +774,24 @@ static int SubtitleShiftUp(const std::vector<std::string>& params)
    return 0;
  }
  
@@ -1149,7 +1142,7 @@ index e4e9906824..fef95910e7 100644
  static int SubtitleShiftDown(const std::vector<std::string>& params)
  {
    CAction action{ACTION_SUBTITLE_VSHIFT_DOWN};
-@@ -888,6 +906,24 @@ static int SubtitleShiftDown(const std::vector<std::string>& params)
+@@ -900,6 +918,24 @@ static int SubtitleShiftDown(const std::vector<std::string>& params)
  ///     @param[in] save                  "save" to keep the change permanently (optional)
  ///   }
  ///   \table_row2_l{
@@ -1174,7 +1167,7 @@ index e4e9906824..fef95910e7 100644
  ///     <b>`Seek(seconds)`</b>
  ///     ,
  ///     Seeks to the specified relative amount of seconds within the current
-@@ -934,6 +970,9 @@ CBuiltins::CommandMap CPlayerBuiltins::GetOperations() const
+@@ -946,6 +982,9 @@ CBuiltins::CommandMap CPlayerBuiltins::GetOperations() const
             {"seek",                {"Performs a seek in seconds on the current playing media file", 1, Seek}},
             {"subtitleshiftup",     {"Shift up the subtitle position", 0, SubtitleShiftUp}},
             {"subtitleshiftdown",   {"Shift down the subtitle position", 0, SubtitleShiftDown}},
@@ -1185,10 +1178,10 @@ index e4e9906824..fef95910e7 100644
  }
  // clang-format on
 diff --git a/xbmc/settings/Settings.h b/xbmc/settings/Settings.h
-index f24f38cb16..f64a9be6b6 100644
+index 0331eda0a7..6335c69e30 100644
 --- a/xbmc/settings/Settings.h
 +++ b/xbmc/settings/Settings.h
-@@ -167,6 +167,8 @@ public:
+@@ -171,6 +171,8 @@ public:
    static constexpr auto SETTING_SUBTITLES_CAPTIONSIMPAIRED = "subtitles.captionsimpaired";
    static constexpr auto SETTING_SUBTITLES_ALIGN = "subtitles.align";
    static constexpr auto SETTING_SUBTITLES_STEREOSCOPICDEPTH = "subtitles.stereoscopicdepth";
@@ -1197,7 +1190,7 @@ index f24f38cb16..f64a9be6b6 100644
    static constexpr auto SETTING_SUBTITLES_FONTNAME = "subtitles.fontname";
    static constexpr auto SETTING_SUBTITLES_FONTSIZE = "subtitles.fontsize";
    static constexpr auto SETTING_SUBTITLES_STYLE = "subtitles.style";
-@@ -183,6 +185,8 @@ public:
+@@ -187,6 +189,8 @@ public:
    static constexpr auto SETTING_SUBTITLES_BGCOLOR = "subtitles.bgcolorpick";
    static constexpr auto SETTING_SUBTITLES_BGOPACITY = "subtitles.bgopacity";
    static constexpr auto SETTING_SUBTITLES_MARGINVERTICAL = "subtitles.marginvertical";

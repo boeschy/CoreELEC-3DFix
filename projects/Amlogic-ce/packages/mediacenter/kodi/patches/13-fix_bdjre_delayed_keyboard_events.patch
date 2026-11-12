@@ -61,7 +61,7 @@ index bb30033137..e6fb2f854e 100644
  
 +void CDVDInputStreamBluray::ProcessPendingEvents()
 +{
-+  if (m_bd == nullptr || !m_navmode || m_hold == HOLD_EXIT || m_hold == HOLD_ERROR ||
++  if (m_bd == nullptr || !m_navmode || m_hold == HOLD_ERROR ||
 +      m_event.event != BD_EVENT_NONE)
 +    return;
 +

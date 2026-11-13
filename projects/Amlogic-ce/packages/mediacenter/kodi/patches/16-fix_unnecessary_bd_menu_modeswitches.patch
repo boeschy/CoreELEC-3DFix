@@ -1,0 +1,43 @@
+diff --git a/xbmc/windowing/amlogic/WinSystemAmlogicGLESContext.cpp b/xbmc/windowing/amlogic/WinSystemAmlogicGLESContext.cpp
+index 27fe621a3e..891c3279f9 100644
+--- a/xbmc/windowing/amlogic/WinSystemAmlogicGLESContext.cpp
++++ b/xbmc/windowing/amlogic/WinSystemAmlogicGLESContext.cpp
+@@ -11,6 +11,7 @@
+ #include "cores/VideoPlayer/DVDCodecs/Video/AMLCodec.h"
+ #include "platform/linux/SysfsPath.h"
+ #include "ServiceBroker.h"
++#include "cores/DataCacheCore.h"
+ #include "settings/Settings.h"
+ #include "settings/SettingsComponent.h"
+ #include "utils/AMLUtils.h"
+@@ -157,6 +158,30 @@ bool CWinSystemAmlogicGLESContext::CreateNewWindow(const std::string& name,
+     __FUNCTION__,
+     res.iWidth, res.iHeight, res.iScreenWidth, res.iScreenHeight, res.fRefreshRate, res.dwFlags, nativeGUI);
+ 
++  // 3D Blu-ray menu clip changes reconfigure the renderer, which requests the same output mode again.
++  // The mode read back from the kernel lacks details like frame packing or the fractional rate
++  // policy, so compare against the mode applied last to avoid an HDMI re-init (and a TV/projector
++  // dropping out of 3D) when nothing relevant changed.
++  if (CServiceBroker::GetDataCacheCore().IsBluray3DNav() && m_bWindowCreated &&
++      IsPresentationReady() && !IsHotplugPending() && !force_mode_switch_by_hotplug &&
++      !force_mode_switch_by_hdr && !force_mode_switch_by_stereo_mode &&
++      m_bFullScreen == fullScreen && nativeGUI == m_nativeGUI &&
++      res.strId == m_lastAppliedResolution.strId &&
++      res.iWidth == m_lastAppliedResolution.iWidth &&
++      res.iHeight == m_lastAppliedResolution.iHeight &&
++      res.iScreenWidth == m_lastAppliedResolution.iScreenWidth &&
++      res.iScreenHeight == m_lastAppliedResolution.iScreenHeight &&
++      (res.dwFlags & D3DPRESENTFLAG_MODEMASK) ==
++          (m_lastAppliedResolution.dwFlags & D3DPRESENTFLAG_MODEMASK) &&
++      MathUtils::FloatEquals(res.fRefreshRate, m_lastAppliedResolution.fRefreshRate, 0.001f))
++  {
++    CLog::Log(LOGDEBUG,
++              "CWinSystemAmlogicGLESContext::{}: Blu-ray 3D navigation, output mode unchanged - "
++              "keep current HDMI mode",
++              __FUNCTION__);
++    return true;
++  }
++
+   if (m_bWindowCreated && IsPresentationReady() &&
+       !force_mode_switch_by_hotplug && !IsHotplugPending() &&
+       m_stereo_mode == RenderStereoMode::HARDWAREBASED &&

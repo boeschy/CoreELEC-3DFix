@@ -10,7 +10,7 @@ PKG_LONGDESC="libbluray jars of this image for the BD-J menus, run by the stock 
 
 unpack() {
   mkdir -p ${PKG_BUILD}
-  tar --strip-components=1 -xf ${SOURCES}/libbluray/libbluray-${PKG_VERSION}.tar.xz -C ${PKG_BUILD}
+  tar --strip-components=1 -xf ${SOURCES}/libbluray/libbluray-${PKG_VERSION}.tar.gz -C ${PKG_BUILD}
 }
 
 post_makeinstall_target() {

@@ -1,0 +1,50 @@
+diff --git a/drivers/frame_provider/decoder/h264_mvc/vh264_mvc.c b/drivers/frame_provider/decoder/h264_mvc/vh264_mvc.c
+index aab2d149..24792d0c 100644
+--- a/drivers/frame_provider/decoder/h264_mvc/vh264_mvc.c
++++ b/drivers/frame_provider/decoder/h264_mvc/vh264_mvc.c
+@@ -1772,10 +1772,19 @@ static int amvdec_h264mvc_probe(struct platform_device *pdev)
+ 	pdata->dec_status = vh264mvc_dec_status;
+ 	/* pdata->set_trickmode = vh264mvc_set_trickmode; */
+ 
++	/*
++	 * vh264mvc_init() loads the firmware with amvdec_loadmc_ex(vdec, ...),
++	 * which reads vdec->format, so vdec has to be valid before that.
++	 */
++	vdec = pdata;
++
+ 	buffer_spec0 = (struct buffer_spec_s *)vzalloc(
+ 		sizeof(struct buffer_spec_s) * MAX_BMMU_BUFFER_NUM * 2);
+-	if (NULL == buffer_spec0)
++	if (NULL == buffer_spec0) {
++		vdec = NULL;
++		mutex_unlock(&vh264_mvc_mutex);
+ 		return -ENOMEM;
++	}
+ 	buffer_spec1 = &buffer_spec0[MAX_BMMU_BUFFER_NUM];
+ 
+ 	if (vh264mvc_init() < 0) {
+@@ -1784,6 +1793,7 @@ static int amvdec_h264mvc_probe(struct platform_device *pdev)
+ 		gvs = NULL;
+ 		vfree(buffer_spec0);
+ 		buffer_spec0 = NULL;
++		vdec = NULL;
+ 		mutex_unlock(&vh264_mvc_mutex);
+ 		return -ENODEV;
+ 	}
+@@ -1792,8 +1802,6 @@ static int amvdec_h264mvc_probe(struct platform_device *pdev)
+ 	INIT_WORK(&set_clk_work, vh264_mvc_set_clk);
+ 	spin_lock_init(&mvc_rp_lock);
+ 
+-	vdec = pdata;
+-
+ 	atomic_set(&vh264mvc_active, 1);
+ 
+ 	mutex_unlock(&vh264_mvc_mutex);
+@@ -1830,6 +1838,7 @@ static KV_INT_TO_VOID amvdec_h264mvc_remove(struct platform_device *pdev)
+ 	buffer_spec0 = NULL;
+ 	kfree(gvs);
+ 	gvs = NULL;
++	vdec = NULL;
+ 
+ 	return KV_RET_x_TO_VOID(0);
+ }
